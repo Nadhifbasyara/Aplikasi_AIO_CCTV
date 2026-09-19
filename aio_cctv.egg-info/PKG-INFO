@@ -9,6 +9,7 @@ Requires-Dist: opencv-python>=4.10
 Requires-Dist: numpy
 Requires-Dist: pydantic>=2.7
 Requires-Dist: yt-dlp
+Requires-Dist: lap>=0.5.12
 Provides-Extra: gui
 Requires-Dist: PyQt6>=6.7; extra == "gui"
 Requires-Dist: pyqtgraph>=0.13; extra == "gui"

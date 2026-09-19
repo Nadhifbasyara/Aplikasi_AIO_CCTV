@@ -4,6 +4,7 @@ opencv-python>=4.10
 numpy
 pydantic>=2.7
 yt-dlp
+lap>=0.5.12
 
 [dev]
 pytest

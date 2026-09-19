@@ -287,11 +287,15 @@ from aio_cctv.analytics.events import CrossingEvent
 class LineCounter:
     """Hitung masuk/keluar (Proposal §8.5: sv.LineZone)."""
 
-    def __init__(self, line_id: str, p1: np.ndarray, p2: np.ndarray):
+    def __init__(self, line_id: str, p1: np.ndarray, p2: np.ndarray, min_cross_frames: int = 1):
+        """min_cross_frames: orang harus terlihat di sisi seberang garis selama N frame berturut-turut
+        sebelum dihitung. Mencegah hitungan "kedip" in/out/in saat orang berdiri di atas garis
+        atau bounding box bergetar."""
         self.line_id = line_id
         self.zone = sv.LineZone(start=sv.Point(int(p1[0]), int(p1[1])),
                                 end=sv.Point(int(p2[0]), int(p2[1])),
-                                triggering_anchors=(sv.Position.BOTTOM_CENTER,))
+                                triggering_anchors=(sv.Position.BOTTOM_CENTER,),
+                                minimum_crossing_threshold=max(1, min_cross_frames))
 
     def update(self, det: sv.Detections, ts: float) -> list[CrossingEvent]:
         if not len(det) or det.tracker_id is None:
@@ -305,6 +309,8 @@ class LineCounter:
     def totals(self) -> tuple[int, int]:
         return self.zone.in_count, self.zone.out_count
 ```
+
+> **Ambang crossing (`line_min_cross_s`, default 0,5 s):** tanpa ambang, orang yang berdiri di atas garis atau kotak yang bergetar tercatat in→out→in berkali-kali. Pada `ref1` (13 fps), ambang 0,5 s menghilangkan semua hitungan bolak-balik < 1 s, sedangkan ≥ 0,8 s mulai membuang orang yang benar-benar melintas.
 
 > Arah “in/out” pada `LineZone` ditentukan urutan titik `p1 → p2`. Di editor (Fase 1/5) tampilkan panah arah, dan sediakan tombol **“balik arah”** (tukar p1/p2).
 
@@ -359,15 +365,18 @@ class AnalyticsEngine:
     """Satu engine untuk semua jenis bisnis; perilakunya 100% dari Profile (Proposal §6)."""
 
     def __init__(self, profile: Profile, frame_wh: tuple[int, int],
-                 grace_s: float = 1.5, min_dwell_s: float = 1.0):
+                 grace_s: float = 1.5, min_dwell_s: float = 1.0,
+                 fps: float | None = None, line_min_cross_s: float = 0.5):
         w, h = frame_wh
+        # ambang crossing dalam detik -> frame, agar konsisten di kamera dengan FPS berbeda
+        min_cross_frames = max(1, round(fps * line_min_cross_s)) if fps else 1
         self.profile = profile
         self.zones = [ZoneDwell(z.id, to_pixels(z.polygon, w, h), grace_s, min_dwell_s)
                       for z in profile.zones]
         self.lines = []
         for ln in profile.lines:
             p1, p2 = to_pixels([ln.p1, ln.p2], w, h)
-            self.lines.append(LineCounter(ln.id, p1, p2))
+            self.lines.append(LineCounter(ln.id, p1, p2, min_cross_frames))
         self.heatmap = HeatmapAccumulator(w, h)
 
     def update(self, det, ts: float) -> FrameResult:
@@ -470,7 +479,7 @@ class Pipeline:
                  conf=0.35, imgsz=640):
         self.detector = Detector(weights, profile.target_classes, conf, imgsz=imgsz)
         self.tracker = ByteTrackTracker(fps)
-        self.engine = AnalyticsEngine(profile, frame_wh)
+        self.engine = AnalyticsEngine(profile, frame_wh, fps=fps)
         self.annotator = Annotator(profile, frame_wh)
         self.times = StageTimes()
 
@@ -644,5 +653,5 @@ Metrik formal (MOTA, IDF1) dihitung di Fase 9 memakai MOT17/MOT20 (Proposal §10
 | Risiko | Mitigasi |
 |---|---|
 | ID switch tinggi pada kerumunan | Tuning, BoT-SORT + ReID (Proposal §7 OSNet), model deteksi lebih besar |
-| Satu orang dihitung berkali-kali saat mondar-mandir di garis | `LineZone` hanya menghitung perpindahan sisi; tambahkan `minimum_crossing_threshold` bila tersedia di versi Supervision yang dipakai |
+| Satu orang dihitung berkali-kali saat mondar-mandir di garis | `minimum_crossing_threshold` lewat `line_min_cross_s` (§4.6); letakkan garis di jalur orang berjalan, bukan tempat berdiri (keset, depan kasir) |
 | API Supervision berubah antarversi | Kunci versi di `pyproject.toml` setelah fase ini stabil |

@@ -9,6 +9,7 @@ dependencies = [
   "numpy",
   "pydantic>=2.7",           
   "yt-dlp",                  
+  "lap>=0.5.12",             # dibutuhkan BoT-SORT/ByteTrack Ultralytics (Fase 3)
 ]
 
 [project.optional-dependencies]
