@@ -105,7 +105,9 @@ import re
 from pathlib import Path
 from urllib.parse import quote
 
-BRANDS = json.loads(Path("configs/camera_brands.json").read_text())
+# path relatif terhadap lokasi file ini (bukan folder kerja), agar tetap jalan dari GUI/folder lain
+BRANDS_FILE = Path(__file__).resolve().parents[2] / "configs" / "camera_brands.json"
+BRANDS = json.loads(BRANDS_FILE.read_text(encoding="utf-8"))
 
 
 def build_url(brand: str, host: str, user: str = "", password: str = "",
@@ -132,6 +134,7 @@ Desain kunci:
 - **Thread penangkap** membaca secepat kamera mengirim; konsumen (pipeline) selalu mengambil **frame terbaru** → frame lama dibuang, latensi tidak menumpuk walau inferensi lebih lambat dari FPS kamera.
 - **Timeout** buka & baca (OpenCV ≥ 4.6) → deteksi kamera mati tanpa hang.
 - **State machine**: `idle → connecting → streaming → reconnecting → … → stopped`.
+- **Backoff reconnect** 1 → 2 → 4 → 5 s (batas `max_backoff_s` = 5 s). Batas besar (mis. 30 s) membuat kamera yang sudah hidup kembali baru tersambung hingga 30 s kemudian. Uji simulator: dengan batas 30 s, frame baru muncul 7,6 s setelah stream kembali.
 
 ```python
 """Sumber RTSP tahan-putus untuk consumer IP camera."""
@@ -170,7 +173,7 @@ class StreamStats:
 
 class RTSPSource:
     def __init__(self, url: str, name: str = "cam", open_timeout_ms: int = 5000,
-                 read_timeout_ms: int = 5000, max_backoff_s: float = 30.0,
+                 read_timeout_ms: int = 5000, max_backoff_s: float = 5.0,
                  hw_accel: bool = False):
         self.url, self.name = url, name
         self.open_timeout_ms, self.read_timeout_ms = open_timeout_ms, read_timeout_ms

@@ -1,0 +1,15 @@
+{
+  "tapo":      { "label": "TP-Link Tapo", "port": 554, "onvif_port": 2020,
+                 "main": "rtsp://{user}:{password}@{host}:{port}/stream1",
+                 "sub":  "rtsp://{user}:{password}@{host}:{port}/stream2" },
+  "hikvision": { "label": "Hikvision", "port": 554, "onvif_port": 80,
+                 "main": "rtsp://{user}:{password}@{host}:{port}/Streaming/Channels/101",
+                 "sub":  "rtsp://{user}:{password}@{host}:{port}/Streaming/Channels/102" },
+  "dahua":     { "label": "Dahua / Imou", "port": 554, "onvif_port": 80,
+                 "main": "rtsp://{user}:{password}@{host}:{port}/cam/realmonitor?channel=1&subtype=0",
+                 "sub":  "rtsp://{user}:{password}@{host}:{port}/cam/realmonitor?channel=1&subtype=1" },
+  "xmeye":     { "label": "XMEye / iCSee", "port": 554, "onvif_port": 8899,
+                 "main": "rtsp://{host}:{port}/user={user}&password={password}&channel=1&stream=0.sdp",
+                 "sub":  "rtsp://{host}:{port}/user={user}&password={password}&channel=1&stream=1.sdp" },
+  "custom":    { "label": "URL manual", "main": "{url}", "sub": "{url}" }
+}

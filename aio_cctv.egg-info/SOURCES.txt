@@ -8,4 +8,5 @@ aio_cctv.egg-info/dependency_links.txt
 aio_cctv.egg-info/requires.txt
 aio_cctv.egg-info/top_level.txt
 tests/test_dwell.py
+tests/test_lines.py
 tests/test_zone_models.py
