@@ -1,0 +1,28 @@
+Metadata-Version: 2.4
+Name: aio-cctv
+Version: 0.0.1
+Requires-Python: <3.13,>=3.10
+License-File: LICENSE
+Requires-Dist: ultralytics>=8.3
+Requires-Dist: supervision>=0.25
+Requires-Dist: opencv-python>=4.10
+Requires-Dist: numpy
+Requires-Dist: pydantic>=2.7
+Requires-Dist: yt-dlp
+Provides-Extra: gui
+Requires-Dist: PyQt6>=6.7; extra == "gui"
+Requires-Dist: pyqtgraph>=0.13; extra == "gui"
+Requires-Dist: keyring; extra == "gui"
+Requires-Dist: platformdirs; extra == "gui"
+Provides-Extra: rtsp
+Requires-Dist: av>=12; extra == "rtsp"
+Requires-Dist: onvif-zeep; extra == "rtsp"
+Requires-Dist: WSDiscovery; extra == "rtsp"
+Provides-Extra: eval
+Requires-Dist: motmetrics; extra == "eval"
+Requires-Dist: pandas; extra == "eval"
+Requires-Dist: matplotlib; extra == "eval"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Dynamic: license-file
