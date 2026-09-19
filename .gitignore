@@ -11,3 +11,8 @@ build/
 dist/
 *.spec
 .env
+outputs/
+mediamtx
+mediamtx.yml
+aio_cctv.egg-info/
+bus.jps
