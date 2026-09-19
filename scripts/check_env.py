@@ -20,6 +20,6 @@ print("Supervision :", sv.__version__)
 print("ffmpeg bin  :", shutil.which("ffmpeg"))
 
 from ultralytics import YOLO
-model = YOLO("yolo11n.pt")            
+model = YOLO("models/yolo11n.pt")
 res = model("https://ultralytics.com/images/bus.jpg", verbose=False)[0]
 print("Uji deteksi :", len(res.boxes), "objek terdeteksi")

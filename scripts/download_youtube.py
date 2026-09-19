@@ -16,7 +16,9 @@ REFERENSI = {
 def download(url: str, out_dir: Path, name: str, max_height: int = 720,
              start: float | None = None, end: float | None = None) -> None:
     opts = {
-        "format": f"bv*[height<={max_height}][ext=mp4]/b[height<={max_height}][ext=mp4]/b",
+        # utamakan H.264 (avc1): AV1/VP9 dari YouTube gagal didekode OpenCV
+        "format": (f"bv*[vcodec^=avc1][height<={max_height}]/"
+                   f"b[vcodec^=avc1][height<={max_height}]/bv*[height<={max_height}]/b"),
         "outtmpl": str(out_dir / f"{name}.%(ext)s"),
         "noplaylist": True,
     }

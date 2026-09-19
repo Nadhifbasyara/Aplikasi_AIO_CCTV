@@ -139,8 +139,10 @@ REFERENSI = {
 def download(url: str, out_dir: Path, name: str, max_height: int = 720,
              start: float | None = None, end: float | None = None) -> None:
     opts = {
-        # hanya video (tanpa audio) mp4 <= 720p: cukup untuk analitik & ringan
-        "format": f"bv*[height<={max_height}][ext=mp4]/b[height<={max_height}][ext=mp4]/b",
+        # hanya video (tanpa audio) <= 720p, utamakan H.264 (avc1):
+        # YouTube sering memberi AV1/VP9 yang GAGAL didekode OpenCV (0 frame terbaca)
+        "format": (f"bv*[vcodec^=avc1][height<={max_height}]/"
+                   f"b[vcodec^=avc1][height<={max_height}]/bv*[height<={max_height}]/b"),
         "outtmpl": str(out_dir / f"{name}.%(ext)s"),
         "noplaylist": True,
     }
@@ -185,9 +187,12 @@ Setelah terunduh, **catat** di `data/videos/README.md` (tidak di-commit, tapi sa
 Cek metadata cepat:
 
 ```bash
-ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate,codec_name \
+ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate \
         -show_entries format=duration -of compact data/videos/ref1.mp4
 ```
+
+> **Wajib cek codec:** kolom `codec_name` harus `h264`. Bila `av1`/`vp9`, OpenCV tidak dapat membaca frame-nya. Konversi:
+> `ffmpeg -i ref1.mp4 -c:v libx264 -crf 20 -pix_fmt yuv420p -an ref1_h264.mp4`
 
 > **Tips memilih video uji:** pilih potongan 1–3 menit dengan sudut kamera **tetap** (CCTV sungguhan, bukan video dengan kamera bergerak/cut adegan). Zona tidak bermakna jika kamera berpindah.
 
@@ -233,7 +238,7 @@ print("Supervision :", sv.__version__)
 print("ffmpeg bin  :", shutil.which("ffmpeg"))
 
 from ultralytics import YOLO
-model = YOLO("yolo11n.pt")            # terunduh otomatis (Proposal §8.1)
+model = YOLO("models/yolo11n.pt")     # bobot disimpan di models/ (bukan root repo)
 res = model("https://ultralytics.com/images/bus.jpg", verbose=False)[0]
 print("Uji deteksi :", len(res.boxes), "objek terdeteksi")
 ```
