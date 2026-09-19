@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "profile_id": "demo_ref1",
+  "vertical": "retail",
+  "source": {
+    "type": "file",
+    "uri": "data/videos/ref1.mp4"
+  },
+  "frame_size": [
+    1270,
+    720
+  ],
+  "target_classes": [
+    "person"
+  ],
+  "zones": [
+    {
+      "id": "z1",
+      "name": "Area Kasir",
+      "type": "dwell",
+      "polygon": [
+        [
+          0.0071,
+          0.2587
+        ],
+        [
+          0.0804,
+          0.2114
+        ],
+        [
+          0.1946,
+          0.751
+        ],
+        [
+          0.0985,
+          0.7914
+        ],
+        [
+          0.0063,
+          0.2573
+        ]
+      ],
+      "color": "#E53935"
+    },
+    {
+      "id": "z2",
+      "name": "Area Antrian",
+      "type": "occupancy",
+      "polygon": [
+        [
+          0.1458,
+          0.1808
+        ],
+        [
+          0.264,
+          0.121
+        ],
+        [
+          0.3869,
+          0.5716
+        ],
+        [
+          0.2837,
+          0.6481
+        ],
+        [
+          0.1466,
+          0.1836
+        ]
+      ],
+      "color": "#1E88E5"
+    }
+  ],
+  "lines": [
+    {
+      "id": "l1",
+      "name": "Pintu Masuk",
+      "type": "counting",
+      "p1": [
+        0.6052,
+        0.9513
+      ],
+      "p2": [
+        0.7849,
+        0.733
+      ],
+      "color": "#FDD835"
+    }
+  ]
+}
