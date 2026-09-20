@@ -6,11 +6,14 @@ from aio_cctv.sources.base import Frame
 
 
 class FileSource:
-    """Sumber file video. ts = posisi waktu video, sehingga hasil deterministik & bisa diulang."""
+    """Sumber file video. ts = posisi waktu video, sehingga hasil deterministik & bisa diulang.
+
+    `path` berupa angka ("0", "1", ...) dibaca sebagai indeks webcam (Fase 5 §5.5).
+    """
 
     def __init__(self, path: str):
         self.path = path
-        self.cap = cv2.VideoCapture(path)
+        self.cap = cv2.VideoCapture(int(path) if str(path).isdigit() else path)
         if not self.cap.isOpened():
             raise IOError(f"Tidak bisa membuka {path}")
         self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 25.0

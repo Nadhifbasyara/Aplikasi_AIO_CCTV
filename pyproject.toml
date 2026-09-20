@@ -13,7 +13,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gui   = ["PyQt6>=6.7", "pyqtgraph>=0.13", "keyring", "platformdirs"]   
+gui   = ["PyQt6>=6.7", "pyqtgraph>=0.13", "keyring", "keyrings.alt", "platformdirs",
+         "shapely>=2.0"]   # shapely: validasi poligon editor zona (Fase 5 §5.6)
 rtsp  = ["av>=12", "onvif-zeep", "WSDiscovery"]                        
 eval  = ["motmetrics", "pandas", "matplotlib"]                         
 dev   = ["pytest", "ruff"]
@@ -21,5 +22,5 @@ dev   = ["pytest", "ruff"]
 [tool.ruff]
 line-length = 100
 
-[tool.setuptools]
-packages = ["aio_cctv"]
+[tool.setuptools.packages.find]
+include = ["aio_cctv*"]

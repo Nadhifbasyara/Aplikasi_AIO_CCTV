@@ -19,7 +19,9 @@ matplotlib
 PyQt6>=6.7
 pyqtgraph>=0.13
 keyring
+keyrings.alt
 platformdirs
+shapely>=2.0
 
 [rtsp]
 av>=12

@@ -18,10 +18,11 @@ class StageTimes:                     # dipakai profiling Fase 8
 
 class Pipeline:
     def __init__(self, profile: Profile, frame_wh, fps: float, weights="models/yolo11s.pt",
-                 conf=0.35, imgsz=640):
-        self.detector = Detector(weights, profile.target_classes, conf, imgsz=imgsz)
+                 conf=0.35, imgsz=640, device=None, grace_s=1.5):
+        self.detector = Detector(weights, profile.target_classes, conf, imgsz=imgsz,
+                                 device=device)
         self.tracker = ByteTrackTracker(fps)
-        self.engine = AnalyticsEngine(profile, frame_wh, fps=fps)
+        self.engine = AnalyticsEngine(profile, frame_wh, grace_s=grace_s, fps=fps)
         self.annotator = Annotator(profile, frame_wh)
         self.times = StageTimes()
 

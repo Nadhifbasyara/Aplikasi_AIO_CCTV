@@ -14,7 +14,9 @@ Provides-Extra: gui
 Requires-Dist: PyQt6>=6.7; extra == "gui"
 Requires-Dist: pyqtgraph>=0.13; extra == "gui"
 Requires-Dist: keyring; extra == "gui"
+Requires-Dist: keyrings.alt; extra == "gui"
 Requires-Dist: platformdirs; extra == "gui"
+Requires-Dist: shapely>=2.0; extra == "gui"
 Provides-Extra: rtsp
 Requires-Dist: av>=12; extra == "rtsp"
 Requires-Dist: onvif-zeep; extra == "rtsp"
