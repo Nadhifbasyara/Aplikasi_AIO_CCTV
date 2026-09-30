@@ -11,5 +11,8 @@
   "xmeye":     { "label": "XMEye / iCSee", "port": 554, "onvif_port": 8899,
                  "main": "rtsp://{host}:{port}/user={user}&password={password}&channel=1&stream=0.sdp",
                  "sub":  "rtsp://{host}:{port}/user={user}&password={password}&channel=1&stream=1.sdp" },
+  "vivotek":   { "label": "Vivotek", "port": 554, "onvif_port": 80,
+                 "main": "rtsp://{user}:{password}@{host}:{port}/live1.sdp",
+                 "sub":  "rtsp://{user}:{password}@{host}:{port}/live2.sdp" },
   "custom":    { "label": "URL manual", "main": "{url}", "sub": "{url}" }
 }
