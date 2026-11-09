@@ -23,6 +23,7 @@ class Zone(BaseModel):
     type: Literal["dwell", "occupancy", "presence"] = "dwell"
     polygon: list[Point]
     color: str = "#E53935"
+    role: str | None = None                       # peran dari manifest modul (Fase 6)
 
     @field_validator("polygon")
     @classmethod
@@ -39,6 +40,7 @@ class Line(BaseModel):
     p1: Point
     p2: Point
     color: str = "#FDD835"
+    role: str | None = None
 
     @field_validator("p1", "p2")
     @classmethod
@@ -57,7 +59,8 @@ class Profile(BaseModel):
     vertical: str = "generic"                     # fnb, retail, clinic, ... (Proposal §1)
     source: SourceConfig
     frame_size: tuple[int, int] | None = None     # resolusi saat zona digambar (info saja)
-    target_classes: list[str] = Field(default_factory=lambda: ["person"])
+    target_classes: list[str] = Field(default_factory=lambda: ["person"])  # Fase 6: diabaikan,
+                                                  # kelas ditentukan manifest modul
     zones: list[Zone] = Field(default_factory=list)
     lines: list[Line] = Field(default_factory=list)
 

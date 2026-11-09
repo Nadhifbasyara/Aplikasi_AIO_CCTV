@@ -1,4 +1,8 @@
-"""Benchmark sederhana yolo11n/s/m pada satu video (bahan pemilihan model, Proposal §7 & §10)."""
+"""Benchmark sederhana yolo11n/s/m pada satu video (bahan pemilihan model, Proposal §7 & §10).
+
+LEGACY (Fase 6): pemilihan model adalah ranah TA-1/TA-2; benchmark sumber daya host
+menyusul sebagai scripts/benchmark_capacity.py (Fase 9).
+"""
 import sys
 import time
 
@@ -13,7 +17,7 @@ frames = [f for _, f in zip(range(300), sv.get_video_frames_generator(video))]  
 print(f"{'model':<12}{'imgsz':>6}{'ms/frame':>10}{'FPS':>7}{'avg_det':>9}")
 for weights in ["models/yolo11n.pt", "models/yolo11s.pt", "models/yolo11m.pt"]:
     for imgsz in (640, 480):
-        d = Detector(weights, imgsz=imgsz)
+        d = Detector(weights, ["person"], imgsz=imgsz)
         d.warmup()
         times, counts = [], []
         for f in frames:

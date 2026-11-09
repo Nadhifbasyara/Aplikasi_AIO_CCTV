@@ -42,15 +42,18 @@ from aio_cctv.sources.snapshot import grab_frame
 from aio_cctv.zones.models import Line, Profile, SourceConfig, Zone, to_pixels
 
 log = logging.getLogger(__name__)
-ZONE_TYPES = ["dwell", "occupancy", "presence"]
 CLOSE_PX = 8                         # klik-ganda menutup poligon tanpa titik kembar
+NO_ROLE = "(tanpa peran)"
+KIND = {"zona": "zone", "garis": "line"}
 
 
-def _detect_persons(weights: str, conf: float, image: np.ndarray):
-    """Dijalankan di thread pool: memuat model bisa makan beberapa detik."""
+def _detect(manifest, device: str | None, image: np.ndarray):
+    """Dijalankan di thread pool: memuat model modul bisa makan beberapa detik."""
     from aio_cctv.inference.detector import Detector
-    det = Detector(weights, ["person"], conf)
-    return det(image).xyxy
+    det = Detector.from_manifest(manifest, device)
+    d = det(image)
+    names = sorted({det.names[int(c)] for c in d.class_id}) if len(d) else []
+    return d.xyxy, names
 
 
 class ZoneCanvas(QGraphicsView):
@@ -176,9 +179,10 @@ class ZoneEditorPage(QWidget):
 
         self.ed_name = QLineEdit()
         self.ed_name.editingFinished.connect(self._apply_name)
-        self.cbo_type = QComboBox()
-        self.cbo_type.addItems(ZONE_TYPES)
-        self.cbo_type.currentTextChanged.connect(self._apply_type)
+        self.cbo_role = QComboBox()
+        self.cbo_role.setToolTip("Peran area menurut modul analitik kamera ini "
+                                 "(mis. meja_kerja, kasir). Dibaca modul lewat Region.role.")
+        self.cbo_role.currentIndexChanged.connect(self._apply_role)
         self.btn_color = QPushButton("Pilih warna")
         self.btn_color.clicked.connect(self._apply_color)
         self.btn_flip = QPushButton("Balik arah")
@@ -189,7 +193,7 @@ class ZoneEditorPage(QWidget):
         props = QGroupBox("Properti")
         form = QFormLayout(props)
         form.addRow("Nama", self.ed_name)
-        form.addRow("Tipe", self.cbo_type)
+        form.addRow("Peran", self.cbo_role)
         form.addRow("Warna", self.btn_color)
         form.addRow("", self.btn_flip)
         form.addRow("", self.btn_delete)
@@ -250,6 +254,18 @@ class ZoneEditorPage(QWidget):
             return
         self.cam_id = new_id
         self.reload()
+
+    def _manifest(self):
+        cam = self._cam
+        info = self.camera_manager.module_for(cam) if cam is not None else None
+        return info.manifest if info is not None and info.valid else None
+
+    def _roles(self, kind: str) -> list[tuple[str, str | None]]:
+        """(label, role) untuk bentuk jenis `kind` ("zona"/"garis") dari manifest modul."""
+        m = self._manifest()
+        roles = [(r.label or r.role, r.role) for r in (m.regions if m else [])
+                 if r.kind == KIND[kind]]
+        return [(NO_ROLE, None), *roles]
 
     @property
     def _cam(self):
@@ -352,11 +368,15 @@ class ZoneEditorPage(QWidget):
         w, h = self.frame_wh
         for z in profile.zones:
             pts = [QPointF(float(x), float(y)) for x, y in to_pixels(z.polygon, w, h)]
-            self._add_shape(EditablePolygon(z.id, pts, z.color, z.name, z.type))
+            shape = EditablePolygon(z.id, pts, z.color, z.name, z.type)
+            shape.role = z.role
+            self._add_shape(shape)
         for ln in profile.lines:
             (x1, y1), (x2, y2) = to_pixels([ln.p1, ln.p2], w, h)
-            self._add_shape(EditableLine(ln.id, QPointF(float(x1), float(y1)),
-                                         QPointF(float(x2), float(y2)), ln.color, ln.name))
+            shape = EditableLine(ln.id, QPointF(float(x1), float(y1)),
+                                 QPointF(float(x2), float(y2)), ln.color, ln.name)
+            shape.role = ln.role
+            self._add_shape(shape)
         self.dirty = False
         self._refresh_list()
 
@@ -465,7 +485,7 @@ class ZoneEditorPage(QWidget):
         for s in self._live_shapes():
             pix = QPixmap(12, 12)
             pix.fill(QColor(s.color))
-            label = f"{s.name}  ·  {s.ztype if s.kind == 'zona' else 'counting'}"
+            label = f"{s.name}  ·  {s.role or s.kind}"
             self.lst.addItem(QListWidgetItem(QIcon(pix), label))
         if current in self.shapes:
             self.lst.setCurrentRow(self.shapes.index(current))
@@ -505,21 +525,21 @@ class ZoneEditorPage(QWidget):
 
     def _sync_properties(self) -> None:
         cur = self._current()
-        is_zone = cur is not None and cur.kind == "zona"
         for w in (self.ed_name, self.btn_color, self.btn_delete):
             w.setEnabled(cur is not None)
-        self.cbo_type.setEnabled(is_zone)
         self.btn_flip.setEnabled(cur is not None and cur.kind == "garis")
         self.ed_name.blockSignals(True)
-        self.cbo_type.blockSignals(True)
+        self.cbo_role.blockSignals(True)
         self.ed_name.setText(cur.name if cur else "")
-        # garis hanya punya tipe "counting"; tampilkan apa adanya, tidak bisa diubah
-        items = ZONE_TYPES if is_zone or cur is None else ["counting"]
-        if [self.cbo_type.itemText(i) for i in range(self.cbo_type.count())] != items:
-            self.cbo_type.clear()
-            self.cbo_type.addItems(items)
-        self.cbo_type.setCurrentText(cur.ztype if is_zone else items[0])
-        self.cbo_type.blockSignals(False)
+        roles = self._roles(cur.kind if cur else "zona")
+        if cur is not None and cur.role and cur.role not in [r for _, r in roles]:
+            roles.append((f"{cur.role} (tidak dikenal modul)", cur.role))
+        self.cbo_role.clear()
+        for label, role in roles:
+            self.cbo_role.addItem(label, role)
+        self.cbo_role.setCurrentIndex(max(0, self.cbo_role.findData(cur.role if cur else None)))
+        self.cbo_role.setEnabled(cur is not None and len(roles) > 1)
+        self.cbo_role.blockSignals(False)
         self.ed_name.blockSignals(False)
 
     def _apply_name(self) -> None:
@@ -531,10 +551,12 @@ class ZoneEditorPage(QWidget):
         self.dirty = True
         self._refresh_list()
 
-    def _apply_type(self, text: str) -> None:
+    def _apply_role(self, _index: int = -1, role: str | None = ...) -> None:
         cur = self._current()
-        if cur is not None and cur.kind == "zona" and text in ZONE_TYPES:
-            cur.ztype = text
+        if role is ...:
+            role = self.cbo_role.currentData()
+        if cur is not None and role != cur.role:
+            cur.role = role
             self.dirty = True
             self._refresh_list()
 
@@ -570,11 +592,13 @@ class ZoneEditorPage(QWidget):
             pts = [shape.mapToScene(p) + off for p in shape.polygon()]
             new = EditablePolygon(self._next_id("z"), pts, shape.color,
                                   self._copy_name(shape.name), shape.ztype)
+            new.role = shape.role
         else:
             ln = shape.line()
             new = EditableLine(self._next_id("l"), shape.mapToScene(ln.p1()) + off,
                                shape.mapToScene(ln.p2()) + off, shape.color,
                                self._copy_name(shape.name))
+            new.role = shape.role
         self._add_shape(new)
         self.dirty = True
         self._refresh_list()
@@ -586,11 +610,12 @@ class ZoneEditorPage(QWidget):
         self._select(shape)
         menu = QMenu(self)
         menu.addAction("Ubah nama…", lambda: self._rename(shape))
-        if shape.kind == "zona":
-            sub = menu.addMenu("Ubah tipe")
-            for t in ZONE_TYPES:
-                sub.addAction(t, lambda t=t: self._apply_type(t))
-        else:
+        roles = self._roles(shape.kind)
+        if len(roles) > 1:
+            sub = menu.addMenu("Peran")
+            for label, role in roles:
+                sub.addAction(label, lambda r=role: self._apply_role(role=r))
+        if shape.kind == "garis":
             menu.addAction("Balik arah IN", self._flip_line)
         menu.addAction("Warna…", self._apply_color)
         menu.addAction("Duplikasi", lambda: self._duplicate(shape))
@@ -615,13 +640,19 @@ class ZoneEditorPage(QWidget):
         if self.snapshot is None:
             self.lbl_status.setText("Ambil snapshot dulu sebelum pratinjau deteksi.")
             return
+        if (manifest := self._manifest()) is None:
+            self.lbl_status.setText("Modul kamera ini tidak terpasang/tidak valid — "
+                                    "pratinjau deteksi butuh model dari modul.")
+            return
         self.btn_preview.setEnabled(False)
-        self.lbl_status.setText("Menjalankan detektor sekali pada snapshot…")
-        s = app_settings()
-        run_async(_detect_persons, s["weights"], s["conf"], self.snapshot,
+        self.lbl_status.setText(f"Menjalankan detektor modul “{manifest.id}” sekali pada "
+                                "snapshot…")
+        device = app_settings()["device"]
+        run_async(_detect, manifest, None if device == "auto" else device, self.snapshot,
                   on_done=self._on_preview, on_failed=self._on_preview_failed)
 
-    def _on_preview(self, boxes) -> None:
+    def _on_preview(self, result) -> None:
+        boxes, names = result
         self.btn_preview.setEnabled(True)
         self._clear_preview()
         pen = QPen(QColor("#00E5FF"), 2)
@@ -639,8 +670,8 @@ class ZoneEditorPage(QWidget):
             self.scene.addItem(foot)
             self.preview_items.append(foot)
         self.lbl_status.setText(
-            f"{len(boxes)} orang terdeteksi. Titik kuning = jangkar kaki; "
-            "pastikan zona menutupinya.")
+            f"{len(boxes)} objek terdeteksi ({', '.join(names) or '-'}). Titik kuning = "
+            "jangkar bawah-tengah kotak; pastikan zona menutupinya.")
 
     def _on_preview_failed(self, msg: str) -> None:
         self.btn_preview.setEnabled(True)
@@ -673,7 +704,7 @@ class ZoneEditorPage(QWidget):
         w, h = self.frame_wh
         profile = self._load_profile()
         profile.frame_size = (w, h)
-        profile.zones = [Zone(id=s.shape_id, name=s.name, type=s.ztype,
+        profile.zones = [Zone(id=s.shape_id, name=s.name, type=s.ztype, role=s.role,
                               polygon=s.normalized(w, h), color=s.color)
                          for s in self.shapes if s.kind == "zona"]
         profile.lines = []
@@ -681,7 +712,7 @@ class ZoneEditorPage(QWidget):
             if s.kind == "garis":
                 p1, p2 = s.normalized(w, h)
                 profile.lines.append(Line(id=s.shape_id, name=s.name, p1=p1, p2=p2,
-                                          color=s.color))
+                                          color=s.color, role=s.role))
         return profile
 
     def save(self) -> bool:

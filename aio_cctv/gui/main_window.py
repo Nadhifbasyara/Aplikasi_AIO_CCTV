@@ -15,10 +15,11 @@ from PyQt6.QtWidgets import (
 from aio_cctv.gui.camera_manager import CameraManager
 from aio_cctv.gui.pages.cameras import CamerasPage
 from aio_cctv.gui.pages.live_view import LiveViewPage
+from aio_cctv.gui.pages.modules import ModulesPage
 from aio_cctv.gui.pages.settings import SettingsPage
 from aio_cctv.gui.pages.zone_editor import ZoneEditorPage
 
-NAV = ["▶ Live", "Kamera", "Zona", "Analitik", "Laporan", "Alert", "Pengaturan"]
+NAV = ["▶ Live", "Kamera", "Zona", "Modul", "Analitik", "Laporan", "Alert", "Pengaturan"]
 
 
 def _placeholder(text: str) -> QLabel:
@@ -58,10 +59,11 @@ class MainWindow(QMainWindow):
         self.page_live = LiveViewPage(self.camera_manager)
         self.page_cameras = CamerasPage(self.camera_manager)
         self.page_zones = ZoneEditorPage(self.camera_manager)
+        self.page_modules = ModulesPage(self.camera_manager)
         self.page_settings = SettingsPage(self.camera_manager)
-        for page in (self.page_live, self.page_cameras, self.page_zones,
-                     _placeholder("Analitik — Fase 6"), _placeholder("Laporan — Fase 6"),
-                     _placeholder("Alert — Fase 6"), self.page_settings):
+        for page in (self.page_live, self.page_cameras, self.page_zones, self.page_modules,
+                     _placeholder("Analitik — Fase 7"), _placeholder("Laporan — Fase 7"),
+                     _placeholder("Alert — Fase 7"), self.page_settings):
             self.content_area.addWidget(page)
         main_layout.addWidget(self.content_area, stretch=5)
 

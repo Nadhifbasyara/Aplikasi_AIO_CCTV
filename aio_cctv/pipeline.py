@@ -1,42 +1,42 @@
+"""Perakit Source → Detector (host) → Modul (tracker + analitik) — Fase 6 §5.4."""
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from aio_cctv.analytics.annotate import Annotator
-from aio_cctv.analytics.engine import AnalyticsEngine
+from aio_cctv.annotate import Annotator
 from aio_cctv.inference.detector import Detector
-from aio_cctv.tracking.tracker import ByteTrackTracker
+from aio_cctv.modules.api import Event, ModuleResult
+from aio_cctv.modules.host import ModuleRunner, build_context
+from aio_cctv.modules.manifest import ModuleManifest
 from aio_cctv.zones.models import Profile
 
 
 @dataclass
-class StageTimes:                     # dipakai profiling Fase 8
+class StageTimes:                     # dipakai profiling Fase 9
     detect_ms: float = 0
-    track_ms: float = 0
-    analytics_ms: float = 0
-    history: list = field(default_factory=list)
+    module_ms: float = 0
 
 
 class Pipeline:
-    def __init__(self, profile: Profile, frame_wh, fps: float, weights="models/yolo11s.pt",
-                 conf=0.35, imgsz=640, device=None, grace_s=1.5):
-        self.detector = Detector(weights, profile.target_classes, conf, imgsz=imgsz,
-                                 device=device)
-        self.tracker = ByteTrackTracker(fps)
-        self.engine = AnalyticsEngine(profile, frame_wh, grace_s=grace_s, fps=fps)
-        self.annotator = Annotator(profile, frame_wh)
+    def __init__(self, manifest: ModuleManifest, profile: Profile, frame_wh, fps: float,
+                 camera_id: str = "cam", params: dict | None = None, device=None,
+                 strict: bool = False):
+        self.manifest = manifest
+        self.detector = Detector.from_manifest(manifest, device)   # Fase 9: InferenceServer
+        self.ctx = build_context(manifest, profile, camera_id, frame_wh, fps, params)
+        self.module = ModuleRunner(manifest, self.ctx, strict=strict)
+        self.annotator = Annotator(profile, frame_wh, manifest)
         self.times = StageTimes()
 
-    def step(self, image, ts):
+    def step(self, image, ts) -> ModuleResult:
         t0 = time.perf_counter()
         det = self.detector(image)
-        t1 = time.perf_counter()
-        det = self.tracker.update(det)
-        t2 = time.perf_counter()
-        res = self.engine.update(det, ts)
-        t3 = time.perf_counter()
-        self.times.detect_ms, self.times.track_ms, self.times.analytics_ms = (
-            (t1 - t0) * 1e3, (t2 - t1) * 1e3, (t3 - t2) * 1e3)
+        self.times.detect_ms = (time.perf_counter() - t0) * 1e3
+        res = self.module.process(image, det, ts)
+        self.times.module_ms = self.module.module_ms
         return res
 
-    def annotate(self, image, res):
+    def annotate(self, image, res: ModuleResult):
         return self.annotator.annotate(image, res)
+
+    def close(self, ts: float) -> list[Event]:
+        return self.module.close(ts)

@@ -40,6 +40,7 @@ class _Shape:
 
     def _init_shape(self, shape_id: str, name: str, color: str) -> None:
         self.shape_id, self.name = shape_id, name or shape_id
+        self.role: str | None = None             # peran dari manifest modul (Fase 6)
         self.handles: list[VertexHandle] = []
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)

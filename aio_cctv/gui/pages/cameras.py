@@ -22,7 +22,7 @@ from aio_cctv.sources.url_builder import BRANDS
 from aio_cctv.zones.models import Profile
 
 log = logging.getLogger(__name__)
-COLS = ["Nama", "Jenis", "Alamat", "Stream", "Zona/Garis", "Status", "Aktif"]
+COLS = ["Nama", "Jenis", "Alamat", "Stream", "Modul", "Zona/Garis", "Status", "Aktif"]
 
 
 class CamerasPage(QWidget):
@@ -33,6 +33,7 @@ class CamerasPage(QWidget):
         self.manager = manager
         self._setup_ui()
         manager.cameras_changed.connect(self.refresh)
+        manager.modules_changed.connect(self.refresh)
         manager.worker_started.connect(lambda _: self.refresh())
         manager.worker_stopped.connect(lambda _: self.refresh())
         self.refresh()
@@ -84,6 +85,12 @@ class CamerasPage(QWidget):
         # tidak boleh memicu permintaan unlock keyring untuk tiap baris
         return source_config(cam)["uri"]
 
+    def _module_label(self, cam: CameraConfig) -> str:
+        info = self.manager.module_for(cam)
+        if info is None:
+            return f"{cam.module_id} (tidak terpasang)"
+        return info.id if info.valid else f"{info.id} (tidak valid)"
+
     def _zone_summary(self, cam: CameraConfig) -> str:
         path = PROFILES_DIR / f"{cam.profile_id or cam.id}.json"
         if not path.exists():
@@ -102,6 +109,7 @@ class CamerasPage(QWidget):
         for r, cam in enumerate(cams):
             values = [cam.name, self._kind_label(cam), self._address(cam),
                       "—" if cam.brand in ("file", "webcam") else cam.stream,
+                      self._module_label(cam),
                       self._zone_summary(cam),
                       "berjalan" if self.manager.is_running(cam.id) else "berhenti"]
             for c, text in enumerate(values):

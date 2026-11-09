@@ -170,7 +170,7 @@ class ModuleResult:
     metrics: list[Metric] = field(default_factory=list)
     events: list[Event] = field(default_factory=list)
     labels: dict[int, str] = field(default_factory=dict)  # track_id -> teks overlay
-    heat: np.ndarray | None = None          # opsional: grid float 0..1 untuk overlay heatmap
+    heat: np.ndarray | None = None          # opsional: grid akumulasi ≥ 0; host yang menormalisasi
 
 
 class AnalyticsModule:
@@ -192,7 +192,7 @@ class AnalyticsModule:
 Aturan tambahan yang ditulis di README kontrak:
 
 - `frame` diberikan **read-only** (`flags.writeable = False`). Modul tidak boleh menggambar di atasnya, karena overlay digambar host dari `labels`.
-- Modul **tidak boleh** membuat thread, mengakses jaringan, atau menulis file di luar `APP_DIR/modules-data/<id>/`.
+- Modul **tidak boleh** membuat thread, mengakses jaringan, atau menulis file. File yang perlu dibaca diambil dari `ctx.module_dir`.
 - Pengecualian dari `process()` ditangkap host. Kamera itu ditandai "modul error" dan kamera lain tetap berjalan.
 - Parameter tracker yang bergantung FPS dihitung dari `ctx.fps`, **bukan** dari FPS kamera, karena host bisa menerapkan *frame stride* (Fase 9).
 
@@ -222,55 +222,63 @@ sequenceDiagram
 
 ```
 aio_cctv/modules/
-├── api.py          # kontrak (§4.3)
-├── manifest.py     # Pydantic: ModuleManifest, ModelSpec, MetricSpec, EventSpec, ParamSpec
-├── registry.py     # scan folder, validasi, cache daftar modul
-└── host.py         # memuat entrypoint (importlib), membungkus panggilan + timing + isolasi error
-modules/baseline/   # eks aio_cctv/tracking + aio_cctv/analytics (Fase 3)
-scripts/check_module.py
+├── api.py          # kontrak (§4.3); + helper CameraContext.zones()/lines()/to_pixels()
+├── manifest.py     # Pydantic: ModuleManifest, ModelSpec, RegionSpec, ParamSpec, MetricSpec, EventSpec
+├── registry.py     # discover/inspect/install (folder & ZIP), import paket modul, load_entrypoint
+├── host.py         # ModuleRunner (timing, frame read-only, ModuleError), build_context,
+│                   # validate_result, result_to_record (format JSONL paritas)
+└── check.py        # run_checks(): dipakai scripts/check_module.py & tombol "Uji modul"
+aio_cctv/annotate.py            # overlay generik + render_heat (eks analytics/annotate.py)
+aio_cctv/pipeline.py            # Detector → ModuleRunner
+modules/baseline/               # eks aio_cctv/tracking + aio_cctv/analytics (Fase 3)
+scripts/check_module.py         # uji kepatuhan & paritas
+scripts/run_module.py           # pengganti run_analytics.py: jalankan modul apa pun pada video
+scripts/legacy/                 # compare_models.py, compare_trackers.py (ranah TA-1)
+aio_cctv/gui/pages/modules.py   # halaman Modul
+aio_cctv/gui/widgets/module_params.py   # formulir params dari manifest
+docs/kontrak-modul.md           # panduan pembuat modul
 ```
 
 ### 5.2 Registry & pemuatan entrypoint
 
+Folder modul didaftarkan sebagai **paket Python bernama unik** (`aio_mod_<id>`, `__path__` = folder modul), lalu entrypoint diimpor sebagai submodulnya (`aio_mod_<id>.analyzer`). Ada dua alasan memakai cara ini, bukan `spec_from_file_location` per file:
+
+1. Modul boleh memakai **import relatif** (`from .dwell import ZoneDwell`), sehingga bisa terdiri dari banyak file.
+2. Dua modul yang sama-sama punya `analyzer.py`/`tracker.py` tidak saling menimpa di `sys.modules`. Ini diuji di `tests/test_modules.py`.
+
 ```python
-import importlib.util
-from pathlib import Path
-
-import yaml
-
-from aio_cctv.modules.manifest import ModuleManifest
-
-
-def load_manifest(module_dir: Path) -> ModuleManifest:
-    data = yaml.safe_load((module_dir / "module.yaml").read_text(encoding="utf-8"))
-    return ModuleManifest.model_validate(data | {"path": str(module_dir)})
+def import_package(m: ModuleManifest) -> str:
+    name = "aio_mod_" + m.id.replace("-", "_")
+    pkg = types.ModuleType(name)
+    pkg.__path__ = [m.path]
+    sys.modules[name] = pkg
+    return name
 
 
-def load_entrypoint(m: ModuleManifest):
-    file, cls = m.entrypoint.split(":")
-    # nama unik per modul agar dua modul dengan analyzer.py tidak saling menimpa di sys.modules
-    spec = importlib.util.spec_from_file_location(f"aio_mod_{m.id.replace('-', '_')}",
-                                                  Path(m.path) / f"{file}.py",
-                                                  submodule_search_locations=[m.path])
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return getattr(mod, cls)
+def load_entrypoint(m: ModuleManifest) -> type[AnalyticsModule]:
+    file, cls_name = m.entrypoint.split(":")
+    mod = importlib.import_module(f"{import_package(m)}.{file}")
+    return getattr(mod, cls_name)
 ```
+
+Lokasi pencarian: `modules/` di repo (bawaan) lalu `APP_DIR/modules/` (dipasang lewat GUI). Jika id-nya sama, yang terakhir menang. `install()` menolak ZIP berisi path yang keluar dari folder tujuan (*zip slip*).
 
 ### 5.3 Detector membaca kelas dari model
 
 ```python
 class Detector:
-    def __init__(self, spec: ModelSpec, module_dir: Path, device=None):
-        self.model = YOLO(str(module_dir / spec.weights))
-        names = self.model.names                                 # {id: nama}, dari bobot rekan
-        wanted = spec.classes or list(names.values())
-        missing = set(wanted) - set(names.values())
-        if missing:
-            raise ValueError(f"Kelas tidak ada di model: {sorted(missing)}")
-        self.class_ids = [i for i, n in names.items() if n in wanted]
-        ...
+    def __init__(self, weights, classes=None, conf=0.35, iou=0.5, imgsz=640, device=None):
+        self.model = YOLO(str(weights))
+        self.names = dict(self.model.names)                      # {id: nama}, dari bobot rekan
+        self.class_ids = self._resolve(classes)                  # None = semua kelas;
+                                                                 # kelas tak dikenal -> ValueError
+    @classmethod
+    def from_manifest(cls, manifest, device=None): ...
+
+    def detect_batch(self, frames): ...                          # disiapkan untuk Fase 9
 ```
+
+Signature konstruktor sengaja tetap kompatibel dengan skrip Fase 2 (`detect_zones.py`).
 
 Model `.onnx`, `.engine`, atau folder OpenVINO juga dimuat lewat `YOLO(path)`. Konversinya dikerjakan Fase 9.
 
@@ -313,8 +321,8 @@ Di laporan TA, modul baseline disebut sebagai **alat uji**, bukan kontribusi ana
 | Bagian | Perubahan |
 |---|---|
 | **Halaman Modul** (baru) | Tabel modul terpasang: nama, versi, penulis, model (kelas, imgsz), status validasi, tombol *Pasang dari folder/ZIP*, *Uji modul* (menjalankan `check_module` pada `samples/`) |
-| Dialog kamera / profil | Pilih modul per kamera + isian `params` yang dibangkitkan otomatis dari manifest |
-| Editor zona | Setiap zona dapat diberi **peran** dari `manifest.regions` |
+| Dialog kamera / profil | Pilih modul per kamera + isian `params` yang dibangkitkan otomatis dari manifest. Disimpan di `CameraConfig.module_id` & `module_params` (kamera lama otomatis `baseline`); pindah ke `ProfileV2` di Fase 8 |
+| Editor zona | Kombo **Tipe** (dwell/occupancy/presence, semantik baseline) diganti **Peran** dari `manifest.regions`; tersimpan sebagai `Zone.role`/`Line.role` (field opsional, profil lama tetap terbaca). Pratinjau deteksi memakai model modul kamera |
 | Pengaturan | Hapus pilihan `yolo11n/s/m`; ukuran model kini ditentukan modul |
 | `VideoTile` / status | Tampilkan metrik generik (label + satuan dari manifest), `detect_ms`, `module_ms`, status "modul error" |
 
@@ -386,3 +394,27 @@ Rekan menyertakan keluaran acuan dari skrip mandirinya (`samples/expected.jsonl`
 | Kontrak berubah di tengah jalan | `api_version` + host mendukung v1.x mundur; perubahan mayor hanya lewat kesepakatan tertulis |
 | Kode modul tidak tepercaya | Modul berasal dari tim sendiri. Tetap tampilkan peringatan saat memasang modul dari ZIP, dan catat hash paketnya |
 | Bobot rekan dilatih dengan imgsz/kelas berbeda dari asumsi | Semuanya dibaca dari bobot (`model.names`) dan manifest, tidak ada asumsi di host |
+
+## 12. Status Implementasi (2026-11-09)
+
+Rincian & bukti: [logbook 2026-11-09 — Fase 6](../logbook/2026-11-09-fase-06.md).
+
+| Butir | Status |
+|---|---|
+| Kontrak v1 (`api.py`, `manifest.py`) + panduan [`docs/kontrak-modul.md`](../kontrak-modul.md) | ✅ draf siap dibagikan, **belum disepakati** TA-1/TA-2 |
+| Registry (discover/inspect/install folder & ZIP), host, pipeline baru, annotator generik | ✅ |
+| Modul baseline + uji paritas sebelum/sesudah refaktor (1452 frame identik) | ✅ |
+| `check_module.py` (kepatuhan + `--record`/`--expected` paritas), `run_module.py` | ✅ |
+| GUI: halaman Modul, modul & params per kamera, peran zona, statistik generik | ✅ (diuji headless) |
+| Modul v0 dari TA-1 / TA-2 terpasang & lulus `check_module` | ⏳ menunggu serah terima |
+
+Pengujian §8:
+
+- [x] `check_module.py` lulus untuk baseline (`[ ]` modul v0 TA-1, `[ ]` modul v0 TA-2)
+- [x] Dua kamera bersamaan dengan modul berbeda (diuji dengan baseline + modul uji)
+- [x] Ganti modul pada kamera tanpa mengubah kode aplikasi (lewat dialog kamera)
+- [x] Modul yang melempar exception hanya mematikan kamera itu
+- [x] Unit test baseline (`test_dwell`, `test_lines`) tetap lulus setelah dipindah
+- [x] Uji paritas baseline: sebelum refaktor = sesudah refaktor
+
+Definition of Done §10: butir 3 (tidak ada rujukan langsung ke kode baseline dari host) ✅. Butir 1 (kontrak disepakati), butir 2 (≥ 1 modul rekan berjalan), dan butir 4 (tag `v0.6-module-host`) masih menunggu TA-1/TA-2.

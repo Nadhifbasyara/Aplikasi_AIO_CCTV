@@ -1,7 +1,6 @@
 import numpy as np
 import supervision as sv
-
-from aio_cctv.analytics.lines import LineCounter
+from aio_mod_baseline.lines import LineCounter
 
 P1, P2 = np.array([0, 100]), np.array([200, 100])     # garis horizontal y = 100
 

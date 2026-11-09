@@ -10,6 +10,8 @@ dependencies = [
   "pydantic>=2.7",           
   "yt-dlp",                  
   "lap>=0.5.12",             # dibutuhkan BoT-SORT/ByteTrack Ultralytics (Fase 3)
+  "pyyaml",                  # module.yaml (Fase 6)
+  "packaging",               # cek requirements modul (Fase 6)
 ]
 
 [project.optional-dependencies]

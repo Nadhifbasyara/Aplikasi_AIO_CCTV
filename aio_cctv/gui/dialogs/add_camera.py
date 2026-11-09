@@ -37,7 +37,9 @@ from aio_cctv.gui.camera_manager import (
     source_config,
 )
 from aio_cctv.gui.utils import app_settings, friendly_error, to_qimage
+from aio_cctv.gui.widgets.module_params import ModuleParamsForm
 from aio_cctv.gui.workers.net_tasks import discover_cameras, run_async
+from aio_cctv.modules.registry import DEFAULT_MODULE
 from aio_cctv.sources.probe import probe
 from aio_cctv.sources.snapshot import grab_frame
 from aio_cctv.sources.url_builder import BRANDS, mask
@@ -156,9 +158,20 @@ class AddCameraDialog(QDialog):
         self.cbo_kind.addItems(["Kamera IP (RTSP)", "File video", "Webcam"])
         self.cbo_kind.currentIndexChanged.connect(self._on_kind_changed)
 
+        self.cbo_module = QComboBox()
+        self.cbo_module.setToolTip("Modul analitik (model + tracker + analitik) untuk kamera ini")
+        for mid, info in sorted(self.manager.modules.items()):
+            label = info.manifest.name if info.manifest else mid
+            self.cbo_module.addItem(f"{label}  ({mid})" + ("" if info.valid else " — tidak valid"),
+                                    mid)
+        self.cbo_module.setCurrentIndex(max(0, self.cbo_module.findData(DEFAULT_MODULE)))
+        self.cbo_module.currentIndexChanged.connect(self._on_module_changed)
+        self.params_form = ModuleParamsForm()
+
         head = QFormLayout()
         head.addRow("Nama", self.ed_name)
         head.addRow("Jenis sumber", self.cbo_kind)
+        head.addRow("Modul analitik", self.cbo_module)
 
         self.lbl_url = QLabel("—")
         self.lbl_url.setWordWrap(True)
@@ -194,11 +207,23 @@ class AddCameraDialog(QDialog):
         self.buttons.accepted.connect(self._on_save)
         self.buttons.rejected.connect(self.reject)
 
+        params_box = QGroupBox("Parameter modul")
+        QVBoxLayout(params_box).addWidget(self.params_form)
+        self._on_module_changed()
+
         lay = QVBoxLayout(self)
         lay.addLayout(head)
         lay.addWidget(self.stack)
+        lay.addWidget(params_box)
         lay.addWidget(test_box, 1)
         lay.addWidget(self.buttons)
+
+    def _manifest(self):
+        info = self.manager.modules.get(self.cbo_module.currentData())
+        return info.manifest if info is not None and info.valid else None
+
+    def _on_module_changed(self, *_args, values: dict | None = None) -> None:
+        self.params_form.set_module(self._manifest(), values)
 
     def _page_ip(self) -> QWidget:
         self.cbo_brand = QComboBox()
@@ -307,12 +332,14 @@ class AddCameraDialog(QDialog):
         """CameraConfig sementara dari isi formulir (belum disimpan)."""
         kind = self.cbo_kind.currentIndex()
         cam_id = self.editing.id if self.editing else "__baru__"
+        module = {"module_id": self.cbo_module.currentData() or DEFAULT_MODULE,
+                  "module_params": self.params_form.values(self._manifest())}
         if kind == KIND_FILE:
             return CameraConfig(cam_id, self.ed_name.text().strip(), "file",
-                                file_path=self.ed_path.text().strip())
+                                file_path=self.ed_path.text().strip(), **module)
         if kind == KIND_WEBCAM:
             return CameraConfig(cam_id, self.ed_name.text().strip(), "webcam",
-                                file_path=str(self.spin_cam.value()))
+                                file_path=str(self.spin_cam.value()), **module)
         return CameraConfig(
             cam_id, self.ed_name.text().strip(), self.cbo_brand.currentData(),
             host=self.ed_host.text().strip(),
@@ -320,6 +347,7 @@ class AddCameraDialog(QDialog):
             user=self.ed_user.text().strip(),
             stream=self.cbo_stream.currentData(),
             url=self.ed_url.text().strip(),
+            **module,
         )
 
     def _uri(self) -> str:
@@ -406,6 +434,11 @@ class AddCameraDialog(QDialog):
         if err := self._validate(cam):
             QMessageBox.warning(self, "Belum lengkap", err)
             return
+        if self._manifest() is None and QMessageBox.question(
+                self, "Modul tidak valid",
+                f"Modul “{cam.module_id}” tidak terpasang atau tidak valid, sehingga kamera "
+                "akan gagal dijalankan. Tetap simpan?") != QMessageBox.StandardButton.Yes:
+            return
         if self.editing is None:
             cam.id = new_camera_id(cam.name, self.manager.cameras)
         cam.profile_id = cam.id
@@ -424,6 +457,12 @@ class AddCameraDialog(QDialog):
 
     def _load(self, cam: CameraConfig) -> None:
         self.ed_name.setText(cam.name)
+        if self.cbo_module.findData(cam.module_id) < 0:      # modul sudah dicopot
+            self.cbo_module.addItem(f"{cam.module_id} — tidak terpasang", cam.module_id)
+        self.cbo_module.blockSignals(True)
+        self.cbo_module.setCurrentIndex(self.cbo_module.findData(cam.module_id))
+        self.cbo_module.blockSignals(False)
+        self._on_module_changed(values=cam.module_params)
         if cam.brand == "file":
             self.cbo_kind.setCurrentIndex(KIND_FILE)
             self.ed_path.setText(cam.file_path)

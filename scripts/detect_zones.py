@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import supervision as sv
 
-from aio_cctv.inference.detector import Detector
+from aio_cctv.inference.detector import Detector  # Fase 2: deteksi saja, tanpa modul
 from aio_cctv.zones.models import Profile, to_pixels
 
 

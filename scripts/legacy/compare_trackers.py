@@ -1,7 +1,10 @@
-"""Bandingkan ByteTrack vs BoT-SORT pada satu video (Fase 3 §5, bahan Fase 9).
+"""Bandingkan ByteTrack vs BoT-SORT pada satu video (Fase 3 §5).
+
+LEGACY (Fase 6): perbandingan algoritma tracking adalah ranah TA-1. Disimpan sebagai
+catatan eksperimen Fase 3; tracker-nya kini bagian modul baseline.
 
 Contoh:
-  python scripts/compare_trackers.py data/videos/ref1.mp4 --frames 300
+  python scripts/legacy/compare_trackers.py data/videos/ref1.mp4 --frames 300
 """
 import argparse
 import time
@@ -9,8 +12,16 @@ import time
 import numpy as np
 import supervision as sv
 
+import importlib
+
+from aio_cctv.core.paths import BUNDLED_MODULES_DIR
 from aio_cctv.inference.detector import Detector
-from aio_cctv.tracking.tracker import ByteTrackTracker, UltralyticsTracker
+from aio_cctv.modules.manifest import load_manifest
+from aio_cctv.modules.registry import import_package
+
+_tracker = importlib.import_module(
+    import_package(load_manifest(BUNDLED_MODULES_DIR / "baseline")) + ".tracker")
+ByteTrackTracker, UltralyticsTracker = _tracker.ByteTrackTracker, _tracker.UltralyticsTracker
 
 
 def summarize(name: str, per_frame: list[sv.Detections], times: list[float]) -> None:
@@ -39,7 +50,7 @@ def main() -> None:
           f"{'umur median':>14}")
 
     # ByteTrack: detektor + tracker terpisah (dipakai Pipeline)
-    det, bt = Detector(args.model), ByteTrackTracker(info.fps)
+    det, bt = Detector(args.model, ["person"]), ByteTrackTracker(info.fps)
     det.warmup()
     out, times = [], []
     for f in frames:

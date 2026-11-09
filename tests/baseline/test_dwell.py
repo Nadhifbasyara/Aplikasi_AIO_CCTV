@@ -1,7 +1,6 @@
 import numpy as np
 import supervision as sv
-
-from aio_cctv.analytics.dwell import ZoneDwell
+from aio_mod_baseline.dwell import ZoneDwell
 
 POLY = np.array([[0, 0], [100, 0], [100, 100], [0, 100]])
 

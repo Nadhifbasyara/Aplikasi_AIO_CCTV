@@ -67,11 +67,12 @@ class VideoTile(QWidget):
             f"Total frame: {s.get('total_frames', 0)}\n"
             f"Decoded frame: {s.get('decoded_frames', 0)}\n"
             f"Dropped frame rate: {s.get('dropped_rate', 0.0):.2f}%\n"
-            f"Detect: {s['detect_ms']:.0f} ms | Process: {s['proc_fps']:.1f} fps"
-            f" | Persons: {s['persons']}"
+            f"Modul: {s.get('module', '-')} | Track: {s.get('tracks', 0)}\n"
+            f"Detect: {s['detect_ms']:.0f} ms | Modul: {s.get('module_ms', 0.0):.0f} ms"
+            f" | Process: {s['proc_fps']:.1f} fps"
         )
-        for name, (n_in, n_out) in (s.get("lines") or {}).items():
-            text += f"\n{name} IN {n_in} / OUT {n_out}"
+        for label, value in (s.get("metrics") or {}).items():   # label & satuan dari manifest
+            text += f"\n{label}: {value}"
         self.footer.setStyleSheet("")
         self.footer.setText(text)
 

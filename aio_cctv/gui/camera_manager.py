@@ -1,5 +1,5 @@
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -8,6 +8,7 @@ from aio_cctv.core import secrets
 from aio_cctv.core.paths import CAMERAS_FILE, PROFILES_DIR
 from aio_cctv.gui.utils import app_settings
 from aio_cctv.gui.workers.pipeline_worker import PipelineWorker
+from aio_cctv.modules.registry import DEFAULT_MODULE, ModuleInfo, discover
 from aio_cctv.sources.url_builder import build_url, mask
 from aio_cctv.zones.models import Profile, SourceConfig
 
@@ -25,6 +26,8 @@ class CameraConfig:
     url: str = ""            # hanya untuk brand "custom": URL RTSP lengkap tanpa kredensial
     profile_id: str = ""
     enabled: bool = True
+    module_id: str = DEFAULT_MODULE  # modul analitik (Fase 6); kamera lama otomatis baseline
+    module_params: dict = field(default_factory=dict)   # menimpa default manifest
 
 
 def with_credentials(url: str, user: str, password: str) -> str:
@@ -58,6 +61,7 @@ def build_source_uri(cam: CameraConfig, password: str) -> str:
 
 class CameraManager(QObject):
     cameras_changed = pyqtSignal()
+    modules_changed = pyqtSignal()
     worker_started = pyqtSignal(str)
     worker_stopped = pyqtSignal(str)
 
@@ -66,7 +70,17 @@ class CameraManager(QObject):
         self.cameras: dict[str, CameraConfig] = {}
         self.workers: dict[str, PipelineWorker] = {}
         self._retired: list[PipelineWorker] = []   # thread yang belum mau berhenti
+        self.modules: dict[str, ModuleInfo] = discover()
         self.load()
+
+    def reload_modules(self) -> None:
+        """Pindai ulang folder modul (setelah memasang modul). Kamera yang sedang berjalan
+        tetap memakai modul yang sudah dimuat sampai dijalankan ulang."""
+        self.modules = discover()
+        self.modules_changed.emit()
+
+    def module_for(self, cam: CameraConfig) -> ModuleInfo | None:
+        return self.modules.get(cam.module_id)
 
     def load(self) -> None:
         if CAMERAS_FILE.exists():
@@ -99,7 +113,8 @@ class CameraManager(QObject):
             return running
         cam = self.cameras[cam_id]
         w = PipelineWorker(cam_id, self.source_uri(cam), self._load_profile(cam),
-                           settings or app_settings())
+                           settings or app_settings(), self.module_for(cam), cam.module_id,
+                           cam.module_params)
         w.finished.connect(lambda cid=cam_id, worker=w: self._on_worker_finished(cid, worker))
         self.workers[cam_id] = w
         self.worker_started.emit(cam_id)           # penonton menyambung sinyal dulu…

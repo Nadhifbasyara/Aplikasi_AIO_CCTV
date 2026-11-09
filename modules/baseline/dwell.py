@@ -1,7 +1,7 @@
 import numpy as np
 import supervision as sv
 
-from aio_cctv.analytics.events import DwellSession
+from .events import DwellSession
 
 
 class ZoneDwell:

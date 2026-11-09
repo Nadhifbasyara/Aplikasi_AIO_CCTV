@@ -1,4 +1,3 @@
-import cv2
 import numpy as np
 import supervision as sv
 
@@ -19,12 +18,3 @@ class HeatmapAccumulator:
         xs = np.clip((pts[:, 0] // self.cell).astype(int), 0, self.acc.shape[1] - 1)
         ys = np.clip((pts[:, 1] // self.cell).astype(int), 0, self.acc.shape[0] - 1)
         np.add.at(self.acc, (ys, xs), 1.0)   # AKUMULASI (perbaikan dari §8.2)
-
-    def render(self, background: np.ndarray | None = None, alpha: float = 0.55) -> np.ndarray:
-        hm = cv2.resize(self.acc, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
-        hm = cv2.GaussianBlur(hm, (0, 0), sigmaX=self.cell * 3)
-        hm = cv2.normalize(hm, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        color = cv2.applyColorMap(hm, cv2.COLORMAP_JET)
-        if background is None:
-            return color
-        return cv2.addWeighted(color, alpha, background, 1 - alpha, 0)
