@@ -14,9 +14,13 @@ DEFAULTS = {
     "language": "id",
     "autostart": True,
     "realtime_file": True,       # putar file sesuai FPS asli (demo terlihat seperti kamera live)
+    "blur": False,               # mode anonim tampilan (Fase 7 §3.7)
+    "retention_days": 90,        # 0 = simpan selamanya
+    "tray_notify": True,         # notifikasi alert di tray
 }
 _TYPES = {"stream": str, "display_fps": int, "device": str, "language": str,
-          "autostart": bool, "realtime_file": bool}
+          "autostart": bool, "realtime_file": bool, "blur": bool, "retention_days": int,
+          "tray_notify": bool}
 
 
 def to_qimage(bgr: np.ndarray) -> QImage:

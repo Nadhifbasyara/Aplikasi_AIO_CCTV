@@ -133,7 +133,7 @@ class StorageWriter(threading.Thread):
         super().__init__(name="storage-writer", daemon=True)
         self.db_path, self.flush_interval = db_path, flush_interval
         self.q: queue.Queue[tuple[str, tuple]] = queue.Queue(maxsize=100_000)
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()   # bukan `_stop`: menimpa metode internal Thread
 
     def put(self, sql: str, params: tuple) -> None:
         try:
@@ -144,8 +144,8 @@ class StorageWriter(threading.Thread):
     def run(self) -> None:
         con = sqlite3.connect(self.db_path)
         con.executescript(SCHEMA)
-        while not self._stop.is_set() or not self.q.empty():
-            self._stop.wait(self.flush_interval)
+        while not self._stop_event.is_set() or not self.q.empty():
+            self._stop_event.wait(self.flush_interval)
             batch: dict[str, list[tuple]] = {}
             while True:
                 try:
@@ -160,7 +160,7 @@ class StorageWriter(threading.Thread):
         con.close()
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
         self.join(timeout=5)
 ```
 
@@ -219,6 +219,8 @@ class Aggregator:
 Label, satuan, dan judul diambil dari manifest. Filter tersedia untuk kamera, modul, zona, dan rentang tanggal. Data dimuat di `QThreadPool` dan di-refresh tiap 30–60 detik.
 
 ### 3.5 Rule engine generik — `aio_cctv/alerts/rules.py`
+
+Aturan disimpan per kamera di `CameraConfig.rules` (`cameras.json`) dan pindah ke `ProfileV2.rules` di Fase 8. Kamera tanpa aturan memakai aturan bawaan host (`camera_offline` 60 s, `module_error`).
 
 ```json
 "rules": [
@@ -357,3 +359,39 @@ def html_to_pdf(html: str, path: str) -> None:
 | Modul mengeluarkan metrik sangat sering (tiap frame × banyak zona) | Agregasi per menit di memori; hanya hasil agregat yang ditulis |
 | Jam sistem PC salah | Peringatan bila selisih NTP besar; simpan zona waktu |
 | Sesi terbuka terpotong saat berhenti | `module.close(ts)` dipanggil saat stop; event penutup ikut disimpan |
+
+## 8. Status Implementasi (2026-11-09)
+
+Rincian & bukti: [logbook 2026-11-09 — Fase 7](../logbook/2026-11-09-fase-07.md).
+
+| Bagian | File | Status |
+|---|---|---|
+| Skema generik, koneksi, retensi | `aio_cctv/storage/schema.sql`, `db.py` | ✅ |
+| Writer satu thread (batch per detik, antrean berbatas) | `aio_cctv/storage/writer.py` | ✅ |
+| Agregator metrik/event/heatmap + `HealthRecorder` | `aio_cctv/storage/aggregator.py` | ✅ |
+| Kueri dashboard & laporan (read-only) | `aio_cctv/storage/queries.py` | ✅ |
+| Rule engine (`metric_gt/lt`, `event`, `camera_offline`, `module_error`, `overload`) | `aio_cctv/alerts/rules.py` | ✅ |
+| Pemakaian CPU/RAM/GPU/VRAM per menit | `aio_cctv/core/sysmon.py` + `CameraManager` | ✅ |
+| Halaman Analitik (widget dari manifest + kesehatan kamera) | `aio_cctv/gui/pages/dashboard.py` | ✅ |
+| Halaman Alert (riwayat + editor aturan), tray, hitungan belum dibaca | `aio_cctv/gui/pages/alerts.py`, `main_window.py` | ✅ |
+| Halaman Laporan (pratinjau, PDF, CSV) | `aio_cctv/gui/pages/reports.py`, `aio_cctv/reports/` | ✅ |
+| Privasi: blur, retensi, validasi `Event.data` | `annotate.py`, `db.purge`, `aggregator.event_data_json` | ✅ |
+| Telegram (opsional) | — | ⏭ tidak dikerjakan |
+| Klip bukti alert (opsional) | — | ⏭ tidak dikerjakan (sesuai "tanpa rekaman video" default) |
+
+Penyimpangan dari rancangan di atas:
+
+- Retensi menghapus **semua** tabel yang lebih tua dari N hari, termasuk `metric_minute`. Rancangan §3.7 (merangkum metrik ke per jam setelah 30 hari) belum dibuat.
+- Aturan `event` dan `metric_*` mendukung `region_role` untuk menyaring zona. Aturan baru `overload` (FPS proses < ambang) ditambahkan untuk Fase 9.
+- Laporan PDF berisi tabel + heatmap, tanpa grafik garis/batang.
+
+Pengujian §4:
+
+- [ ] Uji beban 8 kamera × 8 jam (menunggu simulasi N kamera Fase 9)
+- [x] Konsistensi: event di DB = event modul (38 `dwell_closed`, 9 `line_cross`, identik dengan `run_module.py`)
+- [x] Modul dengan metrik berbeda tampil tanpa ubah skema (baseline + modul uji)
+- [x] Alert sekali per cooldown; `module_error` berfungsi; `camera_offline` diuji unit (belum dengan kamera fisik)
+- [ ] Crash-safety (matikan paksa) belum diuji
+- [x] PDF terbuka & angka sama dengan dashboard
+
+Definition of Done §6: semua butir ✅ kecuali "≥ 2 modul berbeda" yang baru diuji dengan baseline + modul uji (modul TA-1/TA-2 belum ada). Tag `v0.7-data-dashboard` belum dibuat.

@@ -69,13 +69,29 @@ class SettingsPage(QWidget):
             "Tanpa ini file diputar secepat inferensi, bukan seperti kamera live.")
         self.chk_autostart = QCheckBox("Jalankan kamera aktif saat aplikasi dibuka")
 
-        tampilan = QGroupBox("Sumber & tampilan")
+        tampilan = QGroupBox("Sumber && tampilan")   # "&&": "&" tunggal = shortcut Qt
         f2 = QFormLayout(tampilan)
         f2.addRow("Stream untuk analitik", self.cbo_stream)
         f2.addRow("FPS tampilan maks", self.spin_fps)
         f2.addRow("", self.chk_realtime)
         f2.addRow("", self.chk_autostart)
         f2.addRow("", QLabel("Stream dipakai sebagai nilai awal saat menambah kamera baru."))
+
+        self.chk_blur = QCheckBox("Buramkan orang di tampilan live (mode anonim)")
+        self.chk_blur.setToolTip("Kotak setiap orang diburamkan sebelum frame ditampilkan. "
+                                 "Analitik tetap berjalan normal.")
+        self.spin_retention = QSpinBox()
+        self.spin_retention.setRange(0, 3650)
+        self.spin_retention.setSuffix(" hari")
+        self.spin_retention.setSpecialValueText("selamanya")
+        self.spin_retention.setToolTip("Event, metrik, dan alert yang lebih tua dihapus saat "
+                                       "aplikasi dibuka. Video tidak pernah disimpan.")
+        self.chk_tray = QCheckBox("Tampilkan notifikasi alert di tray sistem")
+        privasi = QGroupBox("Data && privasi")
+        f4 = QFormLayout(privasi)
+        f4.addRow("", self.chk_blur)
+        f4.addRow("Simpan data analitik", self.spin_retention)
+        f4.addRow("", self.chk_tray)
 
         self.cbo_lang = QComboBox()
         self.cbo_lang.addItem("Indonesia", "id")
@@ -100,6 +116,7 @@ class SettingsPage(QWidget):
         lay = QVBoxLayout(self)
         lay.addWidget(analitik)
         lay.addWidget(tampilan)
+        lay.addWidget(privasi)
         lay.addWidget(umum)
         lay.addLayout(bar)
         lay.addWidget(self.lbl_status)
@@ -113,6 +130,9 @@ class SettingsPage(QWidget):
         self.spin_fps.setValue(s["display_fps"])
         self.chk_realtime.setChecked(s["realtime_file"])
         self.chk_autostart.setChecked(s["autostart"])
+        self.chk_blur.setChecked(s["blur"])
+        self.spin_retention.setValue(s["retention_days"])
+        self.chk_tray.setChecked(s["tray_notify"])
         self.cbo_lang.setCurrentIndex(max(0, self.cbo_lang.findData(s["language"])))
 
     def values(self) -> dict:
@@ -122,6 +142,9 @@ class SettingsPage(QWidget):
             "display_fps": self.spin_fps.value(),
             "realtime_file": self.chk_realtime.isChecked(),
             "autostart": self.chk_autostart.isChecked(),
+            "blur": self.chk_blur.isChecked(),
+            "retention_days": self.spin_retention.value(),
+            "tray_notify": self.chk_tray.isChecked(),
             "language": self.cbo_lang.currentData(),
         }
 

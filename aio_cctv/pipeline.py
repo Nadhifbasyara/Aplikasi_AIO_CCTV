@@ -19,12 +19,12 @@ class StageTimes:                     # dipakai profiling Fase 9
 class Pipeline:
     def __init__(self, manifest: ModuleManifest, profile: Profile, frame_wh, fps: float,
                  camera_id: str = "cam", params: dict | None = None, device=None,
-                 strict: bool = False):
+                 strict: bool = False, blur: bool = False):
         self.manifest = manifest
         self.detector = Detector.from_manifest(manifest, device)   # Fase 9: InferenceServer
         self.ctx = build_context(manifest, profile, camera_id, frame_wh, fps, params)
         self.module = ModuleRunner(manifest, self.ctx, strict=strict)
-        self.annotator = Annotator(profile, frame_wh, manifest)
+        self.annotator = Annotator(profile, frame_wh, manifest, blur=blur)
         self.times = StageTimes()
 
     def step(self, image, ts) -> ModuleResult:

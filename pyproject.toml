@@ -16,7 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 gui   = ["PyQt6>=6.7", "pyqtgraph>=0.13", "keyring", "keyrings.alt", "platformdirs",
-         "shapely>=2.0"]   # shapely: validasi poligon editor zona (Fase 5 §5.6)
+         "shapely>=2.0",   # shapely: validasi poligon editor zona (Fase 5 §5.6)
+         "psutil", "nvidia-ml-py"]   # pemakaian CPU/RAM/GPU -> system_minute (Fase 7)
 rtsp  = ["av>=12", "onvif-zeep", "WSDiscovery"]                        
 eval  = ["motmetrics", "pandas", "matplotlib"]                         
 dev   = ["pytest", "ruff"]

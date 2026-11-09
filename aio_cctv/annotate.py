@@ -29,9 +29,11 @@ def render_heat(grid: np.ndarray, frame_wh, background: np.ndarray | None = None
 
 
 class Annotator:
-    def __init__(self, profile: Profile, frame_wh, manifest: ModuleManifest):
+    def __init__(self, profile: Profile, frame_wh, manifest: ModuleManifest, blur: bool = False):
         w, h = frame_wh
         self.manifest = manifest
+        # mode anonim (Fase 7 §3.7): kotak orang diburamkan sebelum frame sampai ke GUI
+        self.blur = sv.BlurAnnotator(kernel_size=max(15, w // 40)) if blur else None
         self.box = sv.BoxAnnotator(thickness=2, color_lookup=sv.ColorLookup.TRACK)
         self.label = sv.LabelAnnotator(text_scale=0.5, color_lookup=sv.ColorLookup.TRACK)
         self.trace = sv.TraceAnnotator(trace_length=40, color_lookup=sv.ColorLookup.TRACK)
@@ -49,6 +51,8 @@ class Annotator:
     def annotate(self, frame: np.ndarray, res: ModuleResult) -> np.ndarray:
         det = res.tracks
         img = frame.copy()
+        if self.blur is not None and len(det):
+            img = self.blur.annotate(img, det)
         for z, poly in self.zone_polys:
             color = sv.Color.from_hex(z.color)
             img = sv.draw_polygon(img, poly, color, thickness=2)

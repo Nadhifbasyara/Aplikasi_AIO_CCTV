@@ -133,6 +133,7 @@ class ConsumerModule(AnalyticsModule):
 4. **Parameter yang bergantung FPS** (mis. `lost_track_buffer`) dihitung dari `ctx.fps`, bukan dari FPS kamera.
 5. `process()` harus cepat. Waktunya diukur terpisah sebagai `module_ms` dan ikut menentukan berapa kamera yang sanggup dilayani satu PC.
 6. Pengecualian dari modul tidak menjatuhkan aplikasi: hanya kamera yang memakai modul itu yang berhenti, dengan pesan "Modul error".
+7. **Hitungan sebaiknya dikirim sebagai event**, bukan hanya angka kumulatif. Host menyimpan metrik sebagai agregat per menit, dan penghitung kumulatif (mis. total masuk) kembali ke 0 setiap kali kamera dijalankan ulang. Kirim `Event("masuk", ...)` per kejadian, sehingga dashboard dan laporan bisa menghitung per jam dengan benar. Metrik kumulatif boleh tetap dikirim untuk tampilan live.
 
 ## 6. Menguji sebelum serah terima
 

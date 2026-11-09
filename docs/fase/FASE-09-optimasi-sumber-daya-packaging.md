@@ -120,7 +120,7 @@ class InferenceServer(threading.Thread):
         super().__init__(name=f"inference-{detector.name}", daemon=True)
         self.detector, self.max_batch, self.max_wait_s = detector, max_batch, max_wait_s
         self.q: queue.Queue = queue.Queue(maxsize=max_queue)   # backpressure, lihat §5.7
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()   # bukan `_stop`: menimpa metode internal Thread
 
     def submit(self, frame) -> Future:
         fut: Future = Future()
@@ -128,7 +128,7 @@ class InferenceServer(threading.Thread):
         return fut
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 items = [self.q.get(timeout=0.1)]
             except queue.Empty:
@@ -147,7 +147,7 @@ class InferenceServer(threading.Thread):
                     fut.set_exception(e)
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 ```
 
 `Detector.detect_batch(frames)` = `self.model(frames, ...)` → `[sv.Detections.from_ultralytics(r) ...]`. Server dibuat dan dibagikan oleh `CameraManager` (*reference counting*: dibuat saat kamera pertama yang memakai model itu mulai, dihentikan saat kamera terakhir berhenti).

@@ -1,16 +1,28 @@
 import json
+import logging
+import time
 from dataclasses import asdict, dataclass, field
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
+from aio_cctv.alerts.rules import RuleEngine, parse_rules
 from aio_cctv.core import secrets
-from aio_cctv.core.paths import CAMERAS_FILE, PROFILES_DIR
+from aio_cctv.core.paths import CAMERAS_FILE, DB_FILE, PROFILES_DIR
 from aio_cctv.gui.utils import app_settings
 from aio_cctv.gui.workers.pipeline_worker import PipelineWorker
 from aio_cctv.modules.registry import DEFAULT_MODULE, ModuleInfo, discover
 from aio_cctv.sources.url_builder import build_url, mask
+from aio_cctv.storage.aggregator import record_alert
+from aio_cctv.storage.db import purge
+from aio_cctv.storage.writer import StorageWriter
 from aio_cctv.zones.models import Profile, SourceConfig
+
+log = logging.getLogger(__name__)
+INS_SYSTEM = ("INSERT OR REPLACE INTO system_minute(minute_ts,cpu_pct,ram_mb,gpu_pct,vram_mb,"
+              "cams_active) VALUES (?,?,?,?,?,?)")
+HOST_CHECK_MS = 5000
+SYSTEM_SAMPLE_MS = 5000
 
 
 @dataclass
@@ -28,6 +40,7 @@ class CameraConfig:
     enabled: bool = True
     module_id: str = DEFAULT_MODULE  # modul analitik (Fase 6); kamera lama otomatis baseline
     module_params: dict = field(default_factory=dict)   # menimpa default manifest
+    rules: list = field(default_factory=list)   # aturan alert (Fase 7); kosong = bawaan host
 
 
 def with_credentials(url: str, user: str, password: str) -> str:
@@ -64,14 +77,37 @@ class CameraManager(QObject):
     modules_changed = pyqtSignal()
     worker_started = pyqtSignal(str)
     worker_stopped = pyqtSignal(str)
+    alert_raised = pyqtSignal(str, dict)       # cam_id, alert (sudah tertulis ke DB)
 
-    def __init__(self):
+    def __init__(self, db_path=DB_FILE):
         super().__init__()
         self.cameras: dict[str, CameraConfig] = {}
         self.workers: dict[str, PipelineWorker] = {}
         self._retired: list[PipelineWorker] = []   # thread yang belum mau berhenti
         self.modules: dict[str, ModuleInfo] = discover()
         self.load()
+
+        # Fase 7: satu writer SQLite untuk semua kamera + aturan host + sumber daya PC
+        self.db_path = db_path
+        self.storage = StorageWriter(db_path)      # membuat skema bila DB belum ada
+        try:
+            if removed := purge(db_path, app_settings()["retention_days"]):
+                log.info("retensi data: %s", removed)
+        except Exception as e:                     # DB terkunci: coba lagi saat dibuka berikutnya
+            log.warning("retensi data dilewati: %s", e)
+        self.storage.start()
+        self._host_rules: dict[str, RuleEngine] = {}
+        self._last_stats: dict[str, dict] = {}
+        self._host_timer = QTimer(self)
+        self._host_timer.timeout.connect(self._check_host_rules)
+        self._host_timer.start(HOST_CHECK_MS)
+        self._sys_samples: list[dict] = []
+        self._sys_minute: int | None = None
+        from aio_cctv.core.sysmon import SystemSampler
+        self._sampler = SystemSampler()            # dibuat dini: sampel CPU pertama bermakna
+        self._sys_timer = QTimer(self)
+        self._sys_timer.timeout.connect(self._sample_system)
+        self._sys_timer.start(SYSTEM_SAMPLE_MS)
 
     def reload_modules(self) -> None:
         """Pindai ulang folder modul (setelah memasang modul). Kamera yang sedang berjalan
@@ -112,10 +148,20 @@ class CameraManager(QObject):
         if (running := self.workers.get(cam_id)) is not None:
             return running
         cam = self.cameras[cam_id]
+        try:
+            rules = parse_rules(cam.rules)
+        except Exception as e:                     # aturan rusak di cameras.json: pakai bawaan
+            log.warning("aturan kamera %s tidak valid (%s); memakai aturan bawaan", cam_id, e)
+            rules = parse_rules(None)
+        self._host_rules[cam_id] = RuleEngine(rules)
+        self._last_stats.pop(cam_id, None)
         w = PipelineWorker(cam_id, self.source_uri(cam), self._load_profile(cam),
                            settings or app_settings(), self.module_for(cam), cam.module_id,
-                           cam.module_params)
+                           cam.module_params, storage=self.storage, rules=rules)
         w.finished.connect(lambda cid=cam_id, worker=w: self._on_worker_finished(cid, worker))
+        w.stats_ready.connect(self._on_stats)
+        w.error.connect(self._on_error)
+        w.alert_raised.connect(self.alert_raised)
         self.workers[cam_id] = w
         self.worker_started.emit(cam_id)           # penonton menyambung sinyal dulu…
         w.start()                                  # …baru thread dijalankan
@@ -146,3 +192,54 @@ class CameraManager(QObject):
     def stop_all(self) -> None:
         for cid in list(self.workers):
             self.stop(cid)
+
+    def shutdown(self) -> None:
+        """Dipanggil saat aplikasi ditutup: worker berhenti dulu (flush agregat), lalu writer."""
+        self._host_timer.stop()
+        self._sys_timer.stop()
+        self.stop_all()
+        self._flush_system()
+        self.storage.stop()
+
+    # ------------------------------------------------------------ aturan host (Fase 7)
+    def _emit_host_alerts(self, cam_id: str, alerts) -> None:
+        for a in alerts:
+            self.alert_raised.emit(cam_id, record_alert(self.storage, cam_id, a, time.time()))
+
+    def _on_stats(self, cam_id: str, s: dict) -> None:
+        self._last_stats[cam_id] = s
+
+    def _on_error(self, cam_id: str, msg: str) -> None:
+        if msg.startswith("Modul error") and (eng := self._host_rules.get(cam_id)) is not None:
+            self._emit_host_alerts(cam_id, eng.evaluate_host(time.monotonic(), None, True, None))
+
+    def _check_host_rules(self) -> None:
+        now = time.monotonic()
+        for cam_id in list(self.workers):
+            if (eng := self._host_rules.get(cam_id)) is None:
+                continue
+            s = self._last_stats.get(cam_id)
+            state = s.get("state") if s else None
+            fps = s.get("proc_fps") if s and state in ("streaming", "file") else None
+            self._emit_host_alerts(cam_id, eng.evaluate_host(now, state, False, fps))
+
+    # ------------------------------------------------------------ sumber daya PC
+    def _sample_system(self) -> None:
+        minute = int(time.time() // 60 * 60)
+        if self._sys_minute is not None and minute != self._sys_minute:
+            self._flush_system()
+        self._sys_minute = minute
+        self._sys_samples.append({**self._sampler.sample(), "cams": len(self.workers)})
+
+    def _flush_system(self) -> None:
+        xs = self._sys_samples
+        if not xs or self._sys_minute is None:
+            return
+
+        def avg(key):
+            vals = [x[key] for x in xs if x[key] is not None]
+            return sum(vals) / len(vals) if vals else None
+
+        self.storage.put(INS_SYSTEM, (self._sys_minute, avg("cpu_pct"), avg("ram_mb"),
+                                      avg("gpu_pct"), avg("vram_mb"), max(x["cams"] for x in xs)))
+        self._sys_samples = []

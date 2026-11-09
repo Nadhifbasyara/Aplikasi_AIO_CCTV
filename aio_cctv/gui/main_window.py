@@ -1,5 +1,5 @@
 """Jendela utama: sidebar navigasi + QStackedWidget (Fase 5 §2, §4)."""
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -8,24 +8,25 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QStackedWidget,
+    QStyle,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
 from aio_cctv.gui.camera_manager import CameraManager
+from aio_cctv.gui.pages.alerts import AlertsPage
 from aio_cctv.gui.pages.cameras import CamerasPage
+from aio_cctv.gui.pages.dashboard import DashboardPage
 from aio_cctv.gui.pages.live_view import LiveViewPage
 from aio_cctv.gui.pages.modules import ModulesPage
+from aio_cctv.gui.pages.reports import ReportsPage
 from aio_cctv.gui.pages.settings import SettingsPage
 from aio_cctv.gui.pages.zone_editor import ZoneEditorPage
+from aio_cctv.gui.utils import app_settings
 
 NAV = ["▶ Live", "Kamera", "Zona", "Modul", "Analitik", "Laporan", "Alert", "Pengaturan"]
-
-
-def _placeholder(text: str) -> QLabel:
-    lbl = QLabel(text, alignment=Qt.AlignmentFlag.AlignCenter)
-    lbl.setStyleSheet("color:#888; font-size:14px;")
-    return lbl
+ALERT_PAGE = NAV.index("Alert")
 
 
 class MainWindow(QMainWindow):
@@ -60,10 +61,13 @@ class MainWindow(QMainWindow):
         self.page_cameras = CamerasPage(self.camera_manager)
         self.page_zones = ZoneEditorPage(self.camera_manager)
         self.page_modules = ModulesPage(self.camera_manager)
+        self.page_dashboard = DashboardPage(self.camera_manager)
+        self.page_reports = ReportsPage(self.camera_manager)
+        self.page_alerts = AlertsPage(self.camera_manager)
         self.page_settings = SettingsPage(self.camera_manager)
         for page in (self.page_live, self.page_cameras, self.page_zones, self.page_modules,
-                     _placeholder("Analitik — Fase 7"), _placeholder("Laporan — Fase 7"),
-                     _placeholder("Alert — Fase 7"), self.page_settings):
+                     self.page_dashboard, self.page_reports, self.page_alerts,
+                     self.page_settings):
             self.content_area.addWidget(page)
         main_layout.addWidget(self.content_area, stretch=5)
 
@@ -80,6 +84,30 @@ class MainWindow(QMainWindow):
         self.page_cameras.zones_requested.connect(self._edit_zones)
         self.lbl_online.setText("● 0 kamera online")
 
+        # 4. Alert (Fase 7): tray + jumlah belum dibaca di tombol navigasi
+        self.tray = None
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning)
+            self.tray = QSystemTrayIcon(icon, self)
+            self.tray.setToolTip("AIO-CCTV Analytics")
+            self.tray.messageClicked.connect(lambda: self._go_to(ALERT_PAGE))
+            self.tray.activated.connect(lambda *_: (self.showNormal(), self.activateWindow()))
+            self.tray.show()
+        self.camera_manager.alert_raised.connect(self._on_alert)
+        self.page_alerts.unread_changed.connect(self._set_unread)
+
+    def _on_alert(self, cam_id: str, alert: dict) -> None:
+        cam = self.camera_manager.cameras.get(cam_id)
+        text = f"[{cam.name if cam else cam_id}] {alert['message']}"
+        self.statusBar().showMessage(f"⚠ {text}", 15_000)
+        if self.tray is not None and app_settings()["tray_notify"]:
+            icon = (QSystemTrayIcon.MessageIcon.Critical if alert["severity"] == "critical"
+                    else QSystemTrayIcon.MessageIcon.Warning)
+            self.tray.showMessage("Alert AIO-CCTV", text, icon, 10_000)
+
+    def _set_unread(self, n: int) -> None:
+        self.nav_group.button(ALERT_PAGE).setText(f"Alert ({n})" if n else "Alert")
+
     def _edit_zones(self, cam_id: str) -> None:
         self.page_zones.set_camera(cam_id)
         self._go_to(2)
@@ -90,5 +118,5 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Wajib: tutup thread & koneksi RTSP sebelum keluar (§5.7)."""
-        self.camera_manager.stop_all()
+        self.camera_manager.shutdown()
         super().closeEvent(event)
