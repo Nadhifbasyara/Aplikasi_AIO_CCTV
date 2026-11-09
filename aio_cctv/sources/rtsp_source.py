@@ -10,6 +10,12 @@ from dataclasses import dataclass, field
 
 import cv2
 
+try:
+    import av
+    _HAS_AV = True
+except ImportError:
+    _HAS_AV = False
+
 from aio_cctv.sources.base import Frame
 from aio_cctv.sources.url_builder import mask
 
@@ -25,11 +31,20 @@ class StreamStats:
     connected_since: float | None = None
     downtime_s: float = 0.0
     recv_fps: float = 0.0
+    bytes_received: int = 0
+    bandwidth_kbps: float = 0.0
     _fps_window: list = field(default_factory=list)
+    _bw_window: list = field(default_factory=list)
 
     @property
-    def dropped(self) -> int:           # frame yang dilewati karena konsumen lebih lambat
+    def dropped(self) -> int:
         return self.frames_received - self.frames_consumed
+
+    @property
+    def dropped_rate(self) -> float:
+        if self.frames_received == 0:
+            return 0.0
+        return self.dropped / self.frames_received * 100.0
 
 
 class RTSPSource:
@@ -76,7 +91,7 @@ class RTSPSource:
         return f
 
     # ---------- produsen (thread) ----------
-    def _open(self) -> cv2.VideoCapture | None:
+    def _open_cv(self) -> cv2.VideoCapture | None:
         params = [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, self.open_timeout_ms,
                   cv2.CAP_PROP_READ_TIMEOUT_MSEC, self.read_timeout_ms]
         if self.hw_accel:
@@ -91,11 +106,78 @@ class RTSPSource:
         return cap
 
     def _run(self) -> None:
+        if _HAS_AV:
+            self._run_av()
+        else:
+            log.info("[%s] PyAV tidak tersedia, fallback ke OpenCV (bandwidth = uncompressed)", self.name)
+            self._run_cv()
+
+    def _run_av(self) -> None:
+        backoff, seq, down_since = 1.0, 0, None
+        while not self._stop.is_set():
+            self.state = "connecting"
+            log.info("[%s] membuka (PyAV) %s", self.name, mask(self.url))
+            container = None
+            try:
+                options = {"rtsp_transport": "tcp", "stimeout": str(self.open_timeout_ms * 1000)}
+                container = av.open(self.url, options=options, timeout=(self.open_timeout_ms / 1000.0, self.read_timeout_ms / 1000.0))
+                video_stream = container.streams.video[0]
+                video_stream.thread_type = "AUTO"
+                self.fps = float(video_stream.average_rate or video_stream.rate or 15)
+                self.resolution = (video_stream.codec_context.width,
+                                   video_stream.codec_context.height)
+            except Exception as exc:
+                self.state = "reconnecting"
+                down_since = down_since or time.monotonic()
+                log.warning("[%s] gagal terhubung (PyAV): %s, coba lagi %.0fs", self.name, exc, backoff)
+                if container is not None:
+                    container.close()
+                self._stop.wait(backoff)
+                backoff = min(backoff * 2, self.max_backoff_s)
+                continue
+
+            if down_since is not None:
+                self.stats.downtime_s += time.monotonic() - down_since
+                down_since = None
+            self.state, backoff = "streaming", 1.0
+            self.stats.connected_since = time.time()
+            self._opened.set()
+
+            try:
+                for packet in container.demux(video_stream):
+                    if self._stop.is_set():
+                        break
+                    compressed_bytes = packet.size if packet.size else 0
+                    frames = packet.decode()
+                    for av_frame in frames:
+                        seq += 1
+                        now_m, now_w = time.monotonic(), time.time()
+                        img = av_frame.to_ndarray(format="bgr24")
+                        self.stats.bytes_received += compressed_bytes
+                        self._update_fps(now_m, compressed_bytes)
+                        self.stats.frames_received += 1
+                        self.stats.last_frame_wall = now_w
+                        with self._lock:
+                            self._latest = Frame(img, now_m, now_w, seq)
+                        compressed_bytes = 0
+            except Exception as exc:
+                if not self._stop.is_set():
+                    log.warning("[%s] stream error (PyAV): %s", self.name, exc)
+            finally:
+                container.close()
+
+            if not self._stop.is_set():
+                self.state = "reconnecting"
+                self.stats.reconnects += 1
+                down_since = time.monotonic()
+                log.warning("[%s] stream terputus, reconnect #%d", self.name, self.stats.reconnects)
+
+    def _run_cv(self) -> None:
         backoff, seq, down_since = 1.0, 0, None
         while not self._stop.is_set():
             self.state = "connecting"
             log.info("[%s] membuka %s", self.name, mask(self.url))
-            cap = self._open()
+            cap = self._open_cv()
             if cap is None:
                 self.state = "reconnecting"
                 down_since = down_since or time.monotonic()
@@ -117,7 +199,9 @@ class RTSPSource:
                     break
                 seq += 1
                 now_m, now_w = time.monotonic(), time.time()
-                self._update_fps(now_m)
+                frame_bytes = img.nbytes
+                self.stats.bytes_received += frame_bytes
+                self._update_fps(now_m, frame_bytes)
                 self.stats.frames_received += 1
                 self.stats.last_frame_wall = now_w
                 with self._lock:
@@ -129,9 +213,16 @@ class RTSPSource:
                 down_since = time.monotonic()
                 log.warning("[%s] stream terputus, reconnect #%d", self.name, self.stats.reconnects)
 
-    def _update_fps(self, now: float) -> None:
+    def _update_fps(self, now: float, frame_bytes: int = 0) -> None:
         w = self.stats._fps_window
         w.append(now)
         while w and now - w[0] > 2.0:
             w.pop(0)
         self.stats.recv_fps = len(w) / 2.0
+
+        bw = self.stats._bw_window
+        bw.append((now, frame_bytes))
+        while bw and now - bw[0][0] > 2.0:
+            bw.pop(0)
+        total_bytes = sum(b for _, b in bw)
+        self.stats.bandwidth_kbps = total_bytes / 2.0 / 1024.0

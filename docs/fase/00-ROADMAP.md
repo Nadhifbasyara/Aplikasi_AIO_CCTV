@@ -1,8 +1,29 @@
-# Roadmap Development — Aplikasi Desktop All-in-One Analitik Video Cerdas (RTSP + Consumer IP Camera)
+# Roadmap Development — Aplikasi Desktop Analitik Video Multi-Kamera (Host Model & Modul Analitik Tim)
 
 > Dokumen induk dari seluruh fase development.
 > Referensi utama: [`PROPOSAL-POC-Analitik-CCTV.md`](../../PROPOSAL-POC-Analitik-CCTV.md) (selanjutnya disebut **Proposal**, bagian dirujuk dengan tanda **§**).
-> Dibuat: 2026-09-19
+> Dibuat: 2026-09-19 · **Revisi besar: 2026-11-09 (pasca sidang pra-progres)**, lihat §0.
+
+---
+
+## 0. Catatan Revisi 2026-11-09
+
+Proposal dan Fase 0–5 disusun seolah aplikasi ini mengerjakan **seluruh rantai sendiri**: deteksi (YOLOv11 COCO), tracking (ByteTrack), dan analitik (dwell, heatmap, line-crossing). Setelah sidang pra-progres, ruang lingkup diperjelas. Topik ini dikerjakan **tiga orang**, dan aplikasi ini **tidak** membuat model deteksi maupun analitik sendiri:
+
+| Bagian | Pemilik | Judul TA |
+|---|---|---|
+| **Aplikasi desktop host** (dokumen ini) | Nadhif | Aplikasi desktop analitik: UI multi-kamera, manajemen zona, laporan, alert; integrasi RTSP kamera & DVR; optimasi sumber daya PC edge |
+| **Modul TA-1**: model YOLO11, MOT, dan analitik perilaku konsumen | Rekan TA-1 | *Evaluasi Algoritma Multi-Object Tracking dan Platform Analitik Video untuk Pengukuran Perilaku Konsumen pada Area Komersial* |
+| **Modul TA-2**: model YOLO11, MOT + Re-ID, dan analitik produktivitas pegawai | Rekan TA-2 | *Pemantauan Aktivitas dan Produktivitas Pegawai pada Area Kerja Menggunakan Multi-Object Tracking dengan Re-Identifikasi pada Video CCTV* |
+
+Konsekuensinya bagi rencana:
+
+1. **Aplikasi menjadi host.** Aplikasi memuat **paket modul** dari rekan (bobot YOLO11, tracker, dan logika analitik), menjalankannya pada banyak kamera, lalu menampilkan, menyimpan, dan memberi alert dari hasilnya. Kontraknya ditetapkan di **Fase 6 (baru)**.
+2. **Kode deteksi, tracking, dan analitik dari Fase 2–3 diturunkan statusnya** menjadi **modul baseline** (pengganti sementara dan alat uji), bukan kontribusi TA. Lihat catatan di [FASE-02](FASE-02-deteksi-sederhana-video-youtube.md) dan [FASE-03](FASE-03-tracking-analitik-inti.md).
+3. **Penyimpanan, dashboard, alert, dan laporan dibuat generik** (Fase 7). Aplikasi tidak tahu arti "dwell" atau "produktivitas". Aplikasi hanya mengolah **metrik dan event** yang dideklarasikan modul.
+4. **Optimasi sumber daya menjadi kontribusi inti** (Fase 9). Metrik utamanya adalah **jumlah kamera maksimum per PC edge**, bukan mAP atau MOTA.
+5. **Evaluasi akurasi model (mAP, MOTA/IDF1, error dwell) dikeluarkan** dari Fase 10, karena itu ranah TA-1 dan TA-2. Aplikasi ini cukup membuktikan bahwa hasil modul **di dalam aplikasi identik** dengan hasil modul saat dijalankan mandiri (*uji paritas*).
+6. Fase 6–10 lama dinomori ulang menjadi Fase 7–11.
 
 ---
 
@@ -10,51 +31,56 @@
 
 | Aspek | Isi |
 |---|---|
-| **Target awal (MVP)** | Aplikasi yang bisa **menandai area (marker zona/garis) di atas video** dan melakukan **deteksi orang sederhana** pada video yang diambil dari **YouTube** (video referensi Proposal §2). |
-| **Fokus akhir Tugas Akhir** | **Aplikasi desktop all-in-one untuk analitik video cerdas** yang terintegrasi **protokol RTSP** pada **consumer IP camera** (EZVIZ, TP-Link Tapo, Imou/Dahua, Hikvision, Reolink, kamera V380/iCSee/XMEye, dll). |
-| **Inti teknis** | YOLOv11 (deteksi) → ByteTrack (Multi-Object Tracking) → Analytics Engine berbasis konfigurasi (dwell time, heatmap, line-crossing, okupansi) — Proposal §6, §7, §8. |
-| **Posisi terhadap Proposal** | Proposal merekomendasikan platform SaaS *hybrid edge–cloud* (§6). Fokus akhir TA mengambil **sisi EDGE** dari arsitektur itu (“Agen edge: Python + PyQt6 desktop”, Proposal §7) dan menjadikannya produk utuh. Sisi cloud/multi-tenant tetap dirancang sebagai **ekstensi opsional** (Fase 7), sehingga visi §6 tidak hilang. |
+| **Fokus TA** | **Aplikasi desktop host** untuk analitik video pada PC edge: (a) UI multi-kamera, manajemen zona, alert, laporan; (b) integrasi **RTSP** ke kamera IP dan **DVR/NVR**; (c) **optimasi sumber daya** agar satu PC melayani sebanyak mungkin kamera. |
+| **Yang tidak dikerjakan** | Melatih atau mengevaluasi model deteksi, membandingkan algoritma MOT/Re-ID, dan merancang metrik perilaku konsumen atau produktivitas. Semua itu dikerjakan TA-1 dan TA-2. |
+| **Inti teknis** | `FrameSource` (RTSP/DVR/file) → **InferenceServer bersama** (YOLO11 milik modul; batching; TensorRT/ONNX/OpenVINO) → **modul analitik tim** (tracker + analitik, per kamera) → hasil standar (metrik, event, label) → GUI, SQLite, alert, laporan. |
+| **Posisi terhadap Proposal** | Proposal (§6) adalah rancangan bersama. Aplikasi ini mengambil peran **"Agen edge: Python + PyQt6 desktop"** (Proposal §7) ditambah kontrak integrasi. Sinkronisasi cloud tetap opsional (Fase 8). |
 
-### Usulan judul yang selaras dengan fokus akhir
+### Usulan rumusan masalah (sesuaikan dengan proposal resmi pasca sidang)
 
-Proposal §12 tabel baris #3 menyebut judul desktop sebagai *“paling kuat secara Teknik Komputer”*. Versi yang disarankan untuk fokus akhir ini:
+| RM | Rumusan |
+|---|---|
+| **RM-1** | Bagaimana merancang aplikasi desktop yang dapat **memuat dan menjalankan model YOLO11 serta modul analitik MOT dari penelitian lain tanpa mengubah kode aplikasi**, lengkap dengan UI multi-kamera, manajemen zona, alert, dan laporan? |
+| **RM-2** | Bagaimana mengintegrasikan aliran **RTSP dari kamera IP dan DVR/NVR** secara andal (koneksi ulang otomatis, latensi rendah, multi-channel)? |
+| **RM-3** | Teknik optimasi apa yang paling efektif menekan pemakaian CPU/GPU/RAM, dan **berapa kamera maksimum** yang dapat dilayani satu PC edge pada berbagai kelas perangkat? |
 
-> **“Rancang Bangun Aplikasi Desktop All-in-One Analitik Video Cerdas Berbasis Multi-Object Tracking dengan Integrasi Protokol RTSP pada Kamera IP Konsumer”**
+### Usulan judul yang selaras
 
-Alternatif bila ingin tetap menonjolkan sifat konfigurabel (Proposal §12 “Rekomendasi”):
+> **"Rancang Bangun Aplikasi Desktop Analitik Video Multi-Kamera Berbasis Modul dengan Integrasi Protokol RTSP dan Optimasi Sumber Daya pada Perangkat Edge"**
 
-> *“… Berbasis Multi-Object Tracking dengan Profil Analitik Konfigurabel dan Integrasi Protokol RTSP pada Kamera IP Konsumer”*
+Usulan ini menghindari frasa "Multi-Object Tracking" dan "Platform Analitik" di judul, karena keduanya sudah dipakai TA-1/TA-2. Jika judul resmi sudah ditetapkan, gunakan judul resmi.
 
 ---
 
 ## 2. Daftar Fase
 
-| Fase | Dokumen | Tujuan singkat | Milestone | Estimasi |
-|---|---|---|---|---|
-| 0 | [FASE-00 — Persiapan Lingkungan & Struktur Proyek](FASE-00-persiapan-lingkungan.md) | Environment Python/GPU, struktur repo, unduh video YouTube referensi | — | 1 minggu |
-| 1 | [FASE-01 — Marker Area (Editor Zona & Garis)](FASE-01-marker-area-zona.md) | Menggambar poligon zona & garis di atas frame video → simpan JSON | **M1** | 1–2 minggu |
-| 2 | [FASE-02 — Deteksi Sederhana pada Video YouTube](FASE-02-deteksi-sederhana-video-youtube.md) | YOLOv11 deteksi orang + hitung orang per zona pada video YouTube | **M1 (MVP awal)** | 1–2 minggu |
-| 3 | [FASE-03 — Tracking & Analytics Engine Inti](FASE-03-tracking-analitik-inti.md) | ByteTrack, dwell time, line-crossing, okupansi, heatmap; pipeline modular | **M2** | 3 minggu |
-| 4 | [FASE-04 — Integrasi RTSP & Consumer IP Camera](FASE-04-integrasi-rtsp-ip-camera.md) | Ingest RTSP tahan-putus, ONVIF discovery, matriks kompatibilitas merek | **M3** | 3 minggu |
-| 5 | [FASE-05 — Aplikasi Desktop (PyQt6)](FASE-05-aplikasi-desktop-pyqt6.md) | GUI all-in-one: manajemen kamera, live view multi-kamera, editor zona visual | **M4** | 4 minggu |
-| 6 | [FASE-06 — Penyimpanan, Dashboard, Alert & Laporan](FASE-06-penyimpanan-dashboard-laporan.md) | SQLite, grafik analitik, aturan alert, ekspor CSV/PDF, fitur privasi | **M4** | 3 minggu |
-| 7 | [FASE-07 — Profil Konfigurasi & Template Vertikal](FASE-07-profil-konfigurasi-template.md) | Template F&B/ritel/klinik, import/export profil, (opsional) sinkronisasi cloud | **M4** | 2 minggu |
-| 8 | [FASE-08 — Optimasi Kinerja & Packaging](FASE-08-optimasi-packaging.md) | ONNX/TensorRT/OpenVINO, multi-kamera efisien, installer Windows/Linux | **M5** | 2–3 minggu |
-| 9 | [FASE-09 — Pengujian & Evaluasi](FASE-09-pengujian-evaluasi.md) | Metrik Proposal §10: mAP, MOTA/IDF1, error dwell, FPS, RTSP, SUS | **M5** | 3 minggu |
-| 10 | [FASE-10 — Dokumentasi & Penulisan Laporan TA](FASE-10-dokumentasi-laporan-ta.md) | Buku TA, manual pengguna, demo, persiapan sidang | **M6** | berjalan paralel + 3 minggu akhir |
+| Fase | Dokumen | Tujuan singkat | Status | Milestone | Estimasi |
+|---|---|---|---|---|---|
+| 0 | [FASE-00 — Persiapan Lingkungan](FASE-00-persiapan-lingkungan.md) | Environment Python/GPU, struktur repo, video uji | ✅ Selesai | — | — |
+| 1 | [FASE-01 — Marker Area (Zona & Garis)](FASE-01-marker-area-zona.md) | Poligon zona & garis ternormalisasi → JSON | ✅ Selesai | M1 | — |
+| 2 | [FASE-02 — Deteksi Sederhana](FASE-02-deteksi-sederhana-video-youtube.md) | YOLO11 COCO + hitung orang per zona | ✅ Selesai, **kini jadi baseline** | M1 | — |
+| 3 | [FASE-03 — Tracking & Analitik Inti](FASE-03-tracking-analitik-inti.md) | ByteTrack, dwell, line-crossing, heatmap | ✅ Selesai, **kini jadi modul baseline** | M2 | — |
+| 4 | [FASE-04 — Integrasi RTSP & IP Camera](FASE-04-integrasi-rtsp-ip-camera.md) | Ingest RTSP tahan-putus, ONVIF, template merek | ⚠️ Sebagian (kamera fisik belum diuji) | M3 | — |
+| 5 | [FASE-05 — Aplikasi Desktop (PyQt6)](FASE-05-aplikasi-desktop-pyqt6.md) | GUI: manajemen kamera, live view, editor zona | ⚠️ Sebagian (kamera fisik & SUS belum) | M4a | — |
+| **6** | [**FASE-06 — Integrasi Model & Modul Analitik Tim**](FASE-06-integrasi-model-modul-tim.md) | **Kontrak modul**, loader, YOLO11 dari paket modul, refaktor pipeline, alat uji kepatuhan | 🆕 Berikutnya | **M4b** | 2–3 minggu |
+| 7 | [FASE-07 — Penyimpanan, Dashboard, Alert & Laporan](FASE-07-penyimpanan-dashboard-alert-laporan.md) | SQLite **generik** (metrik/event dari modul), dashboard dari manifest, rule engine, CSV/PDF | Belum | M4c | 3 minggu |
+| 8 | [FASE-08 — Profil Kamera, Preset Modul & Import/Export](FASE-08-profil-konfigurasi-preset.md) | Profil v2 (kamera + modul + zona bertag + aturan), wizard preset, `.aioprofile` | Belum | **M4** | 1–2 minggu |
+| 9 | [FASE-09 — Optimasi Sumber Daya Multi-Kamera, DVR & Packaging](FASE-09-optimasi-sumber-daya-packaging.md) | **InferenceServer + batching**, TensorRT/OpenVINO, sub-stream & HW decode, DVR multi-channel, uji kapasitas, installer | Belum | **M5** | 4 minggu |
+| 10 | [FASE-10 — Pengujian & Evaluasi](FASE-10-pengujian-evaluasi.md) | Kapasitas kamera/PC, ablation optimasi, keandalan RTSP/DVR, paritas modul, black-box, SUS | Belum | M5 | 3 minggu |
+| 11 | [FASE-11 — Dokumentasi & Laporan TA](FASE-11-dokumentasi-laporan-ta.md) | Buku TA, manual, panduan pembuat modul, demo, sidang | Paralel | **M6** | paralel + 3 minggu |
 
-**Total estimasi:** ± 24–27 minggu (± 6 bulan). Fase 10 dikerjakan **paralel sejak Fase 1** (catat hasil setiap fase), lalu difinalkan di akhir.
+**Sisa estimasi (Fase 6–11):** ± 16–18 minggu. Fase 6 adalah **jalur kritis**, karena modul TA-1/TA-2 hanya bisa masuk setelah kontraknya disepakati.
 
 ### Milestone
 
 | Milestone | Isi yang bisa didemokan | Selesai setelah |
 |---|---|---|
-| **M1 — MVP Awal** | Buka video YouTube → gambar zona → lihat kotak deteksi orang + jumlah orang per zona | Fase 2 |
-| **M2 — Analytics Engine** | Video → ID tracking + label “ID 7 \| 2m 15s” + heatmap + hitung masuk/keluar (setara target visual Proposal §2 & §8.3) | Fase 3 |
-| **M3 — Live RTSP** | Engine yang sama berjalan pada kamera IP konsumer asli, auto-reconnect | Fase 4 |
-| **M4 — Aplikasi All-in-One** | Satu aplikasi desktop: tambah kamera, gambar zona, live analitik, dashboard, alert, laporan, template | Fase 7 |
-| **M5 — Siap Rilis & Terukur** | Installer + hasil evaluasi lengkap sesuai Proposal §10 | Fase 9 |
-| **M6 — Sidang** | Buku TA, demo video, slide | Fase 10 |
+| M1–M3 | MVP deteksi, analitik baseline, live RTSP | ✅ Fase 2–4 |
+| **M4a** | GUI multi-kamera + editor zona (dengan modul baseline) | ✅ Fase 5 (sebagian) |
+| **M4b — Host modul** | Aplikasi memuat **modul TA-1 dan TA-2** (atau versi awalnya), dan keduanya bisa dipilih per kamera tanpa ubah kode | Fase 6 |
+| **M4 — Aplikasi lengkap** | + dashboard, alert, laporan, profil/preset | Fase 8 |
+| **M5 — Terukur & siap rilis** | Kapasitas kamera/PC terukur sebelum dan sesudah optimasi, DVR multi-channel, installer | Fase 10 |
+| **M6 — Sidang** | Buku TA, demo, slide | Fase 11 |
 
 ---
 
@@ -62,117 +88,112 @@ Alternatif bila ingin tetap menonjolkan sifat konfigurabel (Proposal §12 “Rek
 
 ```mermaid
 flowchart LR
-    F0[F0 Persiapan] --> F1[F1 Marker Zona]
-    F1 --> F2[F2 Deteksi YouTube]
-    F2 --> F3[F3 Tracking + Analitik]
-    F3 --> F4[F4 RTSP & IP Camera]
-    F3 --> F5[F5 Desktop PyQt6]
-    F4 --> F5
-    F5 --> F6[F6 Data, Dashboard, Alert]
-    F5 --> F7[F7 Profil & Template]
-    F6 --> F8[F8 Optimasi & Packaging]
+    F5[F5 Desktop PyQt6 ✅] --> F6[F6 Integrasi Modul Tim]
+    T[(Paket modul<br/>TA-1 & TA-2)] -.serah terima.-> F6
+    F6 --> F7[F7 Data, Dashboard, Alert]
+    F6 --> F8[F8 Profil & Preset]
     F7 --> F8
-    F8 --> F9[F9 Pengujian & Evaluasi]
-    F9 --> F10[F10 Laporan & Sidang]
-    F0 -. catatan tiap fase .-> F10
+    F6 --> F9[F9 Optimasi & DVR]
+    F8 --> F9
+    F9 --> F10[F10 Pengujian]
+    F10 --> F11[F11 Laporan & Sidang]
 ```
 
-> Fase 4 dapat **dimulai paralel** dengan akhir Fase 3 karena hanya bergantung pada antarmuka `FrameSource` (lihat Fase 3 §Arsitektur Modul).
+> Bagian **InferenceServer** di Fase 9 boleh dimulai paralel dengan Fase 7, karena hanya bergantung pada kontrak Fase 6.
+> Bila modul rekan terlambat, Fase 7–9 tetap berjalan dengan **modul baseline**. Kontrak yang sama menjamin modul asli tinggal dipasang.
 
 ---
 
-## 4. Arsitektur Target Akhir (turunan Proposal §6)
+## 4. Arsitektur Target Akhir
 
 ```mermaid
 flowchart TB
-    subgraph APP["APLIKASI DESKTOP ALL-IN-ONE (satu PC di lokasi)"]
+    subgraph APP["APLIKASI DESKTOP HOST (kontribusi TA ini)"]
         subgraph SRC["Sumber Video"]
-            S1[File video / YouTube<br/>Fase 0-2]
-            S2[RTSP consumer IP cam<br/>Fase 4]
-            S3[Webcam USB]
+            S1[Kamera IP<br/>RTSP/ONVIF]
+            S2[DVR/NVR<br/>RTSP multi-channel]
+            S3[File video]
         end
-        SRC --> ING[FrameSource<br/>thread per kamera, auto-reconnect]
-        ING --> DET[Detector<br/>YOLOv11 / ONNX / TensorRT]
-        DET --> TRK[Tracker<br/>ByteTrack / BoT-SORT]
-        TRK --> ENG[Analytics Engine<br/>dwell, line, okupansi, heatmap]
-        PROF[/Profil JSON<br/>zona, garis, aturan/] -.-> ENG
-        ENG --> RULE[Rule Engine / Alert]
-        ENG --> DB[(SQLite<br/>metrik & event)]
-        ENG --> UI[GUI PyQt6<br/>live view, editor zona]
+        SRC --> ING[FrameSource<br/>thread per kamera, auto-reconnect,<br/>sub-stream, HW decode]
+        ING --> INF[InferenceServer bersama<br/>batching lintas kamera<br/>TensorRT / ONNX / OpenVINO]
+        INF --> MOD
+        ING -. frame .-> MOD
+        PROF[/Profil kamera<br/>modul + zona bertag + aturan/] -.-> MOD
+        MOD --> RES[Hasil standar<br/>tracks, metrik, event, label]
+        RES --> UI[GUI PyQt6<br/>live view, editor zona]
+        RES --> RULE[Rule Engine / Alert]
+        RES --> DB[(SQLite<br/>metrik & event generik)]
         DB --> DASH[Dashboard & Laporan<br/>CSV / PDF]
         RULE --> NOTIF[Notifikasi<br/>tray / Telegram]
     end
-    DB -. opsional: agregat saja .-> CLOUD[(Backend cloud<br/>Proposal §6)]
+    subgraph MOD["Modul analitik (milik TA-1 / TA-2), satu instans per kamera"]
+        W[(Bobot YOLO11<br/>dimuat oleh host)]
+        TRK[Tracker MOT / Re-ID]
+        ANA[Logika analitik<br/>perilaku konsumen / produktivitas]
+        TRK --> ANA
+    end
+    W -.dimuat ke.-> INF
 ```
 
-Prinsip Proposal §6 tetap dipegang: **video tidak pernah keluar dari PC lokasi**; yang disimpan/dikirim hanya **metrik agregat** (privasi, Proposal §11).
+Pembagian kerjanya: **host menjalankan model** (agar bisa dibagi dan di-batch lintas kamera, yang merupakan inti optimasi), sedangkan **modul menentukan isi model, tracker, dan analitiknya**.
+
+Prinsip privasi Proposal §6/§11 tetap berlaku: video tidak keluar dari PC lokasi, dan yang disimpan hanya metrik/event.
 
 ---
 
-## 5. Struktur Repository Final (disepakati sejak Fase 0)
+## 5. Struktur Repository Target
 
 ```
 Aplikasi_AIO_CCTV/
-├── PROPOSAL-POC-Analitik-CCTV.md
-├── docs/fase/                 # dokumen fase (file ini)
-├── aio_cctv/                  # paket utama aplikasi
-│   ├── core/                  # config, profile schema, logging, paths
-│   ├── sources/               # FileSource, RTSPSource, WebcamSource, ONVIF, brand templates
-│   ├── zones/                 # model zona/garis + editor OpenCV (Fase 1)
-│   ├── inference/             # Detector (Ultralytics, ONNX, TensorRT)
-│   ├── tracking/              # wrapper ByteTrack / BoT-SORT
-│   ├── analytics/             # dwell, line counter, okupansi, heatmap, engine, rules
-│   ├── storage/               # SQLite repository, writer thread
-│   ├── reports/               # ekspor CSV/PDF
+├── aio_cctv/
+│   ├── core/                  # paths, secrets, logging, profil
+│   ├── sources/               # FileSource, RTSPSource, ONVIF, template merek, DVR multi-channel (F9)
+│   ├── zones/                 # model zona/garis (Fase 1)
+│   ├── modules/               # (F6) api.py = kontrak modul, registry.py, host.py
+│   ├── inference/             # Detector YOLO11 (F6), InferenceServer, backend export (F9)
+│   ├── storage/               # (F7) SQLite generik, writer thread, agregator
+│   ├── alerts/                # (F7) rule engine generik
+│   ├── reports/               # (F7) ekspor CSV/PDF
 │   ├── gui/                   # aplikasi PyQt6
-│   └── pipeline.py            # perakit Detector→Tracker→Engine
-├── configs/
-│   ├── profiles/              # profil per kamera
-│   └── templates/             # template vertikal (fnb, retail, clinic, ...)
-├── data/                      # (gitignore) video, rekaman uji, dataset
-├── models/                    # (gitignore) bobot .pt/.onnx/.engine
-├── scripts/                   # unduh YouTube, evaluasi, benchmark
-├── tests/                     # pytest
-├── pyproject.toml
-└── main.py                    # entry point GUI
+│   └── pipeline.py            # (F6) perakit Source → Inference → Modul
+├── modules/                   # paket modul terpasang (pengembangan)
+│   ├── baseline/              # (F6) eks kode Fase 2–3: ByteTrack + dwell/line/heatmap
+│   ├── ta1-perilaku-konsumen/ # diserahkan TA-1
+│   └── ta2-produktivitas/     # diserahkan TA-2
+├── configs/                   # profil kamera, template merek kamera
+├── models/                    # (gitignore) bobot COCO untuk baseline
+├── scripts/                   # check_module.py, benchmark_capacity.py, sim_cameras.sh
+├── tests/
+└── main.py
 ```
+
+`aio_cctv/tracking/` dan `aio_cctv/analytics/` dari Fase 3 **dipindahkan** ke `modules/baseline/` di Fase 6.
 
 ---
 
-## 6. Keterlacakan (Traceability) Proposal → Fase
+## 6. Keterlacakan Rumusan Masalah → Fase
 
-| Bagian Proposal | Dibahas di fase |
+| RM / aspek | Fase |
 |---|---|
-| §1 Kemampuan dasar (MOT, dwell, heatmap, traffic, line-crossing, konfigurasi zona) | F1, F2, F3, F7 |
-| §2 Video referensi YouTube | F0 (unduh), F2–F3 (uji visual) |
-| §3 Latar belakang — kamera konsumer mengunci RTSP | F4 |
-| §4 Rumusan Masalah 1 (RTSP → data terstruktur real-time) | F3, F4, F9 |
-| §4 Rumusan Masalah 2 (MOT & occlusion) | F3, F9 |
-| §4 Rumusan Masalah 3 (konfigurasi tanpa ubah kode) | F1, F7, F9 |
-| §4 Rumusan Masalah 4 (akurasi & FPS) | F8, F9 |
-| §5 Tujuan & Batasan | Semua; batasan dirangkum di tiap fase |
-| §6 Arsitektur | F3 (engine), F5 (aplikasi), F7 (opsi cloud) |
-| §7 Pemilihan teknologi | F0 (instalasi), F3, F5, F8 |
-| §8.2 Skrip POC | F2–F3 (dikembangkan & diperbaiki) |
-| §8.4 Konfigurasi JSON tenant | F1 (skema v1), F7 (skema v2 + template) |
-| §8.5 Roadmap fitur (line counter, editor zona visual, multi-kamera, alert, VLM) | F3, F5, F6, F8 (VLM opsional) |
-| §9 Metodologi | F9, F10 |
-| §10 Rencana pengujian & metrik | F9 |
-| §11 Etika & privasi | F6 (fitur privasi), F10 (pembahasan) |
-| §12 Judul | Bagian 1 dokumen ini, F10 |
-| §13 Dataset publik | F9 |
-| §14 Referensi | F10 |
+| RM-1 host modul, UI multi-kamera, zona | F1, F5, **F6**, F8 |
+| RM-1 alert & laporan | F7 |
+| RM-2 RTSP kamera IP | F4, F10 |
+| RM-2 DVR/NVR multi-channel | **F9**, F10 |
+| RM-3 optimasi & kapasitas | **F9**, F10 |
+| Privasi (Proposal §11) | F7, F11 |
+| Usability | F5, F10 |
 
 ---
 
 ## 7. Konvensi yang Berlaku di Semua Fase
 
 1. **Bahasa kode:** Python 3.11, nama modul/kelas bahasa Inggris, komentar & teks UI bahasa Indonesia.
-2. **Koordinat zona ternormalisasi (0..1)** — bukan piksel seperti contoh Proposal §8.4 — agar zona tetap valid saat resolusi berubah (mis. *main-stream* 2560×1440 vs *sub-stream* 640×360 pada kamera IP). Ditetapkan di Fase 1.
-3. **Waktu berbasis timestamp, bukan hitungan frame** — perbaikan atas skrip Proposal §8.2 (lihat Fase 3), karena pada RTSP frame bisa hilang/terlambat.
-4. **Setiap fase diakhiri:** tag git (`v0.<fase>`), catatan hasil di `docs/logbook/`, dan *checklist Definition of Done* di dokumen fasenya.
-5. **Privasi by default** (Proposal §11): tanpa pengenalan wajah, tanpa menyimpan video mentah secara default, kredensial kamera di OS keyring.
-6. **Video YouTube** hanya dipakai sebagai bahan uji riset lokal — tidak didistribusikan ulang, cantumkan sumber di laporan.
+2. **Koordinat zona ternormalisasi (0..1)**. Format ini juga yang diterima modul tim (kontrak Fase 6).
+3. **Waktu berbasis timestamp** (`time.monotonic()` dari source), bukan hitungan frame. Modul menerima `ts` yang sama.
+4. **Kontrak modul berversi** (`api_version`, SemVer). Perubahan yang merusak kompatibilitas wajib menaikkan versi mayor dan diberitahukan ke TA-1/TA-2.
+5. **Setiap fase diakhiri:** tag git (`v0.<fase>`), logbook di `docs/logbook/`, dan checklist *Definition of Done*.
+6. **Privasi by default:** tanpa pengenalan wajah, tanpa rekaman video mentah secara default, kredensial di OS keyring. Modul dilarang mengirim citra/biometrik di dalam event.
+7. **Atribusi:** setiap model atau modul dari TA-1/TA-2 disebut sumbernya di aplikasi (menu Tentang/Modul) dan di buku TA.
 
 ---
 
@@ -180,9 +201,10 @@ Aplikasi_AIO_CCTV/
 
 | Risiko | Dampak | Mitigasi | Fase |
 |---|---|---|---|
-| Kamera konsumer tidak menyediakan RTSP (cloud-only) | Fokus akhir terhambat | Beli/pinjam ≥2 merek yang **terbukti** RTSP (Tapo C2xx, Imou/Dahua, V380/iCSee); simulasi RTSP dengan MediaMTX sejak awal | F0, F4 |
-| Tidak ada GPU / GPU lemah | FPS rendah | Model `yolo11n`, imgsz 480/320, ONNX/OpenVINO untuk CPU, sub-stream | F8 |
-| ID tracking sering berganti (occlusion) | Dwell time tidak akurat | *Grace period* zona, tuning `lost_track_buffer`, opsi BoT-SORT + ReID | F3, F9 |
-| GUI membeku karena inferensi | UX buruk | Pipeline di `QThread`, *latest-frame* dropping | F5 |
-| Scope membengkak (SaaS penuh, VLM) | Terlambat | SaaS & VLM ditandai **opsional**; kerjakan hanya setelah M4 | F7, F8 |
-| Ukuran installer besar (PyTorch) | Distribusi sulit | Build runtime ONNX tanpa PyTorch | F8 |
+| Modul TA-1/TA-2 terlambat atau berubah-ubah | Integrasi molor | Kontrak disepakati dan dibekukan di awal F6; modul baseline sebagai pengganti; serah terima bertahap (v0 dummy → v1) | F6 |
+| Batas tanggung jawab dengan TA-1 kabur ("Platform Analitik Video" ada di judul TA-1) | Dianggap tumpang tindih saat sidang | Tabel pembagian §0 disepakati bersama dan dikonfirmasi ke pembimbing; aplikasi ini = *runtime/host*, TA-1 = logika & metrik analitik | F6, F11 |
+| Modul rekan lambat (mis. Re-ID mahal per orang) | Kapasitas kamera rendah | `module_ms` diukur terpisah dari `detect_ms`; kapasitas dilaporkan per modul; temuan diumpankan balik ke rekan | F9, F10 |
+| Dependensi modul bentrok (versi ultralytics/boxmot/torch) | Modul gagal dimuat | `requirements` di manifest, versi dipin bersama; `check_module.py` | F6, F9 |
+| Kamera/DVR fisik belum tersedia | RM-2 lemah | Pinjam ≥1 DVR + ≥2 kamera; MediaMTX untuk simulasi N kamera | F9, F10 |
+| GIL Python membatasi banyak kamera dalam satu proses | Kapasitas mentok di CPU | Diukur; opsi worker multi-proses (F9 §5.6) | F9 |
+| Ukuran installer besar (PyTorch) | Distribusi sulit | Varian ONNX/OpenVINO tanpa PyTorch | F9 |

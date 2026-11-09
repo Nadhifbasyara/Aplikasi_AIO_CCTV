@@ -3,6 +3,8 @@
 > Sebelumnya: [FASE-01](FASE-01-marker-area-zona.md) · Kembali ke [Roadmap](00-ROADMAP.md) · Berikutnya: [FASE-03 Tracking & Analitik](FASE-03-tracking-analitik-inti.md)
 > Referensi Proposal: **§8.2** (skrip inti — bagian deteksi), **§7** (YOLOv11, “Apakah YOLO cukup?”), **§2** (video referensi), **§5** (objek utama: *person*), **§13** (“YOLO pretrained COCO sudah cukup”)
 > Estimasi: **1–2 minggu** · Milestone: **M1 — MVP Awal selesai**
+>
+> **Catatan revisi 2026-11-09:** Deteksi YOLO11 pretrained COCO di fase ini kini berstatus **baseline/pengganti sementara**. Model deteksi akhir disediakan TA-1/TA-2 dan dimuat melalui paket modul ([FASE-06](FASE-06-integrasi-model-modul-tim.md)); `COCO_NAME_TO_ID` dihapus di sana. Lihat [Roadmap §0](00-ROADMAP.md#0-catatan-revisi-2026-11-09).
 
 ---
 

@@ -1,8 +1,10 @@
 # FASE 5 — Aplikasi Desktop All-in-One (PyQt6)
 
-> Sebelumnya: [FASE-04](FASE-04-integrasi-rtsp-ip-camera.md) · Kembali ke [Roadmap](00-ROADMAP.md) · Berikutnya: [FASE-06 Data & Dashboard](FASE-06-penyimpanan-dashboard-laporan.md)
+> Sebelumnya: [FASE-04](FASE-04-integrasi-rtsp-ip-camera.md) · Kembali ke [Roadmap](00-ROADMAP.md) · Berikutnya: [FASE-06 Integrasi Modul Tim](FASE-06-integrasi-model-modul-tim.md)
 > Referensi Proposal: **§7** (“Agen edge: Python + PyQt6 (desktop)… berjalan di lokasi pelanggan, olah video lokal”), **§8.5** (“Editor zona visual… klik-tarik poligon di atas snapshot kamera → hasilkan JSON otomatis”, “Multi-zona & multi-kamera”), **§6** (edge/on-premise), **§12** judul #3 (“Aplikasi Desktop All-in-One”)
 > Estimasi: **4 minggu** · Milestone: **M4 — Aplikasi All-in-One** (bagian 1)
+>
+> **Catatan revisi 2026-11-09:** Pilihan model `yolo11n/s/m` di halaman Pengaturan dan `Pipeline` per worker akan diganti di [FASE-06](FASE-06-integrasi-model-modul-tim.md) (modul dipilih per kamera) dan [FASE-09](FASE-09-optimasi-sumber-daya-packaging.md) (InferenceServer bersama).
 
 ---
 

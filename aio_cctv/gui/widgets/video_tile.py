@@ -22,6 +22,7 @@ class VideoTile(QWidget):
         self.view.setMinimumHeight(180)
         self.view.setStyleSheet("background:#111; color:#888;")
         self.footer = QLabel("—")
+        self.footer.setWordWrap(True)
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
@@ -58,10 +59,19 @@ class VideoTile(QWidget):
 
     def set_stats(self, s: dict) -> None:
         self._paint_header(s["state"])
-        text = (f"{s['state']} | {s['proc_fps']:.1f} fps | {s['persons']} orang"
-                f" | det {s['detect_ms']:.0f} ms | reconnect {s['reconnects']}")
+        width, height = s.get("resolution", (0, 0))
+        text = (
+            f"Stream type: {s.get('stream_type', '-')}\n"
+            f"Resolution: {width}x{height} | FPS: {s.get('stream_fps', 0.0):.1f}\n"
+            f"Bandwidth: {s.get('bandwidth_kbps', 0.0):.2f} kBps\n"
+            f"Total frame: {s.get('total_frames', 0)}\n"
+            f"Decoded frame: {s.get('decoded_frames', 0)}\n"
+            f"Dropped frame rate: {s.get('dropped_rate', 0.0):.2f}%\n"
+            f"Detect: {s['detect_ms']:.0f} ms | Process: {s['proc_fps']:.1f} fps"
+            f" | Persons: {s['persons']}"
+        )
         for name, (n_in, n_out) in (s.get("lines") or {}).items():
-            text += f" | {name} IN {n_in}/OUT {n_out}"
+            text += f"\n{name} IN {n_in} / OUT {n_out}"
         self.footer.setStyleSheet("")
         self.footer.setText(text)
 

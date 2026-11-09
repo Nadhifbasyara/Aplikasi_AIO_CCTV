@@ -3,6 +3,8 @@
 > Sebelumnya: [FASE-02](FASE-02-deteksi-sederhana-video-youtube.md) · Kembali ke [Roadmap](00-ROADMAP.md) · Berikutnya: [FASE-04 RTSP](FASE-04-integrasi-rtsp-ip-camera.md)
 > Referensi Proposal: **§1** (kemampuan dasar), **§6** (Analytics Engine “digerakkan KONFIGURASI”), **§7** (ByteTrack, BoT-SORT, Supervision), **§8.2** (dwell time + heatmap), **§8.5** (line counter `sv.LineZone`), **§4 RM-1 & RM-2**
 > Estimasi: **3 minggu** · Milestone: **M2 — Analytics Engine**
+>
+> **Catatan revisi 2026-11-09:** ByteTrack + dwell/line-crossing/heatmap di fase ini **bukan lagi kontribusi TA**, karena tracking & analitik dikerjakan TA-1/TA-2. Kodenya dipindah menjadi **modul baseline** (`modules/baseline/`) di [FASE-06](FASE-06-integrasi-model-modul-tim.md), yang berfungsi sebagai implementasi acuan kontrak dan alat uji. Prinsip yang tetap berlaku untuk host: waktu berbasis timestamp, `FrameSource`, dan pengukuran waktu per tahap. Lihat [Roadmap §0](00-ROADMAP.md#0-catatan-revisi-2026-11-09).
 
 ---
 

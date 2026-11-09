@@ -1,139 +1,110 @@
-# FASE 8 — Optimasi Kinerja & Packaging (Installer Desktop)
+# FASE 9 — Optimasi Sumber Daya Multi-Kamera, Integrasi DVR & Packaging
 
-> Sebelumnya: [FASE-07](FASE-07-profil-konfigurasi-template.md) · Kembali ke [Roadmap](00-ROADMAP.md) · Berikutnya: [FASE-09 Pengujian & Evaluasi](FASE-09-pengujian-evaluasi.md)
-> Referensi Proposal: **§3** (“analitik real-time bisa berjalan di PC/edge device berbiaya wajar”), **§4 RM-4** (throughput FPS pada perangkat kelas menengah), **§7** (YOLOv11/RT-DETR, VLM opsional), **§10** (target ≥ 20 FPS di RTX 3060; skalabilitas kamera per node), **§8.5** (VLM sebagai fitur premium)
-> Estimasi: **2–3 minggu** · Milestone: **M5** (bagian 1)
+> Sebelumnya: [FASE-08](FASE-08-profil-konfigurasi-preset.md) · Kembali ke [Roadmap](00-ROADMAP.md) · Berikutnya: [FASE-10 Pengujian & Evaluasi](FASE-10-pengujian-evaluasi.md)
+> Referensi Proposal: **§3** (analitik real-time di PC/edge berbiaya wajar), **§10** (skalabilitas kamera per node)
+> Estimasi: **4 minggu** · Milestone: **M5** (bagian 1) · Menjawab: **RM-3** (utama) dan **RM-2** (DVR)
+> *Revisi 2026-11-09: dahulu FASE-08. Kini menjadi **kontribusi inti**. Metrik utamanya diubah dari "FPS 1 kamera" menjadi **kapasitas kamera per PC**, dan ditambah integrasi DVR/NVR multi-channel.*
 
 ---
 
 ## 1. Tujuan
 
-1. **Mengukur** (profiling) lalu **mengoptimasi** pipeline sehingga memenuhi target Proposal §10 dan dapat menangani **beberapa kamera** per PC.
-2. Menyediakan backend inferensi alternatif: **ONNX Runtime** (CPU/GPU), **TensorRT FP16** (NVIDIA), **OpenVINO** (CPU/iGPU Intel).
-3. **Inferensi terpusat + batching** untuk multi-kamera (hemat VRAM & lebih efisien daripada 1 model per kamera).
-4. **Packaging**: installer Windows & Linux yang bisa dipasang pengguna awam, termasuk varian ringan **tanpa PyTorch**.
-5. Kesiapan operasional: logging, auto-start, watchdog, *soak test*.
+1. Mendefinisikan dan **mengukur kapasitas** `N_max`, yaitu jumlah kamera maksimum yang dapat dilayani satu PC edge dengan kualitas layanan terjaga.
+2. Menerapkan teknik optimasi secara **bertahap dan terukur** (ablation), sehingga kontribusi setiap teknik terhadap `N_max` dan pemakaian sumber daya terlihat.
+3. **Inferensi terpusat + batching** lintas kamera untuk model YOLO11 milik modul.
+4. Integrasi **DVR/NVR**: banyak channel dari satu perangkat, sub-stream, dan batas koneksi.
+5. **Packaging** installer Windows & Linux, termasuk cara mendistribusikan modul tim.
+6. Kesiapan operasional: watchdog, logging, *soak test*.
 
-## 2. Profiling Dahulu, Optimasi Kemudian
+## 2. Definisi Kapasitas (kriteria QoS)
 
-`Pipeline.times` (Fase 3) sudah mencatat waktu per tahap. Tambahkan pencatatan **decode** (di source) dan **render/emit** (di worker), lalu buat skrip `scripts/benchmark.py` yang menjalankan N frame dan menulis tabel:
+Sebuah konfigurasi **N kamera** dinyatakan *terlayani* bila selama 10 menit pengukuran, **setiap** kamera memenuhi:
 
-| Tahap | ms/frame (median) | % total |
+| Kriteria | Ambang awal (disepakati dengan TA-1/TA-2) | Alasan |
 |---|---|---|
-| Decode RTSP/file | | |
-| Pra-proses + inferensi | | |
-| Tracking | | |
-| Analitik (zona, garis, heatmap) | | |
-| Anotasi + konversi QImage | | |
-| **Total / FPS efektif** | | |
+| FPS analitik efektif | ≥ `F_min` = 8 FPS | Tracker MOT (terutama Re-ID) butuh laju minimum; nilainya diambil dari `manifest.params.min_fps` atau kesepakatan |
+| Latensi frame→hasil p95 | ≤ 500 ms | Overlay & alert terasa real-time |
+| Frame di-*drop* oleh antrean inferensi | ≤ 5% dari frame yang dijadwalkan | Bukan drop karena stride yang disengaja |
+| Pemakaian sumber daya | CPU < 90%, VRAM < 90%, RAM stabil | Sisakan ruang untuk GUI & OS |
 
-Alat bantu: `py-spy top --pid <PID>` (tanpa ubah kode), `nvidia-smi dmon`, `psutil` untuk CPU/RAM.
+`N_max` = N terbesar yang lolos semua kriteria. Hasilnya dilaporkan **per perangkat × per modul** (baseline, TA-1, TA-2), karena biaya modul berbeda-beda.
 
-## 3. Matriks Eksperimen Optimasi
+## 3. Instrumentasi & Alat Ukur
 
-| Teknik | Variasi | Ekspektasi | Catat |
-|---|---|---|---|
-| Ukuran model | yolo11n / s / m | n tercepat, m paling akurat | FPS, mAP (Fase 9) |
-| Resolusi input | imgsz 640 / 480 / 320 | ~2× lebih cepat per turunnya resolusi, akurasi orang jauh turun | FPS, recall |
-| Backend | PyTorch / ONNX Runtime / TensorRT FP16 / OpenVINO | TensorRT tercepat di NVIDIA; OpenVINO terbaik di CPU Intel | FPS, ukuran paket |
-| Stream | main vs sub | sub jauh lebih ringan (decode + resize) | FPS, recall |
-| Frame stride | inferensi tiap 1 / 2 / 3 frame | FPS naik, tracking bisa turun | ID switch |
-| Batching multi-kamera | 1 model/kamera vs 1 model batch N | VRAM turun, throughput total naik | FPS per kamera, VRAM |
-| HW decode | off / on (`CAP_PROP_HW_ACCELERATION`) | CPU turun untuk H.265 | CPU % |
+### 3.1 Waktu per tahap
 
-Setiap baris diuji pada **≥2 kelas perangkat** (mis. laptop tanpa GPU diskrit & PC RTX 3060) → tabel ini menjawab **RM-4**.
+`StageTimes` (Fase 6) diperluas:
 
-## 4. Implementasi
+| Tahap | Diukur di |
+|---|---|
+| `decode_ms` | `RTSPSource` (PyAV/OpenCV) |
+| `queue_ms` | Menunggu giliran di `InferenceServer` |
+| `detect_ms` | Inferensi YOLO11 (dibagi rata per frame dalam batch) |
+| `module_ms` | `module.process()` (tracker + analitik rekan) |
+| `render_ms` | Annotate + konversi `QImage` (hanya tile yang terlihat) |
+| `latency_ms` | `time.monotonic()` saat hasil siap − `Frame.ts` |
 
-### 4.1 Ekspor model
+Nilai rata-rata per menit masuk `camera_health` (Fase 7). Pemakaian CPU/RAM (`psutil`) dan GPU/VRAM (`pynvml`) masuk `system_minute`.
 
-```python
-from ultralytics import YOLO
+### 3.2 Simulasi N kamera — `scripts/sim_cameras.sh`
 
-m = YOLO("models/yolo11n.pt")
-m.export(format="onnx", imgsz=640, simplify=True, dynamic=False)   # -> yolo11n.onnx
-m.export(format="engine", imgsz=640, half=True)                    # TensorRT (butuh GPU NVIDIA + TensorRT)
-m.export(format="openvino", imgsz=640, half=False)                 # -> yolo11n_openvino_model/
+MediaMTX (sudah ada di repo) + ffmpeg mem-*publish* N stream dari file secara berulang. Ini sama persis dengan pola beban kamera nyata, tetapi bisa diulang:
+
+```bash
+#!/usr/bin/env bash
+# Pemakaian: scripts/sim_cameras.sh <video> <N> [fps] [lebar]
+VIDEO=$1; N=$2; FPS=${3:-15}; W=${4:-1280}
+for i in $(seq 1 "$N"); do
+  ffmpeg -nostdin -loglevel error -re -stream_loop -1 -i "$VIDEO" \
+    -vf "fps=$FPS,scale=$W:-2" -c:v libx264 -preset veryfast -tune zerolatency -g "$FPS" \
+    -f rtsp "rtsp://127.0.0.1:8554/cam$i" &
+done
+wait
 ```
 
-> File `.engine` TensorRT **terikat GPU & versi TensorRT** di mesin tempat dibuat → buat saat instalasi/first-run di PC pengguna, bukan dibawa di installer.
+> Encoding N stream juga memakan CPU di PC yang sama. Untuk angka final, jalankan simulator di **PC kedua** dalam LAN, atau pre-encode file lalu gunakan `-c copy`.
 
-Ultralytics dapat memuat langsung `YOLO("yolo11n.onnx")`, `YOLO("yolo11n.engine")`, `YOLO("yolo11n_openvino_model/")` — sehingga `Detector` Fase 2 cukup menerima path berbeda.
+### 3.3 Benchmark kapasitas — `scripts/benchmark_capacity.py`
 
-### 4.2 Detector ONNX murni (tanpa PyTorch) — `aio_cctv/inference/onnx_detector.py`
+Menjalankan aplikasi *headless* (tanpa GUI, atau dengan `QT_QPA_PLATFORM=offscreen`) dengan N = 1, 2, 4, 6, 8, …, hingga kriteria §2 gagal. Untuk setiap N, warm-up 60 s lalu ukur 10 menit. Keluarannya CSV per N (FPS min/median per kamera, latensi p50/p95, drop%, CPU%, GPU%, RAM, VRAM) dan nilai `N_max`.
 
-Untuk build ringan: `onnxruntime` (~50 MB) menggantikan `torch` + `ultralytics` (> 1 GB). Pra/pasca-proses ditulis sendiri:
-
-```python
-import cv2
-import numpy as np
-import onnxruntime as ort
-import supervision as sv
-
-
-def letterbox(img: np.ndarray, size: int):
-    h, w = img.shape[:2]
-    r = min(size / h, size / w)
-    nw, nh = int(round(w * r)), int(round(h * r))
-    canvas = np.full((size, size, 3), 114, dtype=np.uint8)
-    top, left = (size - nh) // 2, (size - nw) // 2
-    canvas[top:top + nh, left:left + nw] = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
-    return canvas, r, left, top
-
-
-class OnnxDetector:
-    """YOLO11 ONNX: output (1, 4 + n_kelas, N) — cx, cy, w, h + skor kelas (tanpa objectness)."""
-
-    def __init__(self, path: str, class_ids=(0,), conf: float = 0.35, iou: float = 0.5,
-                 imgsz: int = 640, providers=None):
-        self.sess = ort.InferenceSession(
-            path, providers=providers or ["CUDAExecutionProvider", "CPUExecutionProvider"])
-        self.inp = self.sess.get_inputs()[0].name
-        self.class_ids = np.array(class_ids)
-        self.conf, self.iou, self.imgsz = conf, iou, imgsz
-
-    def __call__(self, frame: np.ndarray) -> sv.Detections:
-        img, r, left, top = letterbox(frame, self.imgsz)
-        blob = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).transpose(2, 0, 1)[None].astype(np.float32) / 255.0
-        pred = self.sess.run(None, {self.inp: blob})[0][0].T          # (N, 4 + n_kelas)
-
-        cls_scores = pred[:, 4:][:, self.class_ids]
-        best = cls_scores.argmax(axis=1)
-        scores = cls_scores[np.arange(len(pred)), best]
-        keep = scores > self.conf
-        if not keep.any():
-            return sv.Detections.empty()
-        boxes, scores, cls = pred[keep, :4], scores[keep], self.class_ids[best[keep]]
-
-        # cx,cy,w,h (ruang letterbox) -> x1,y1,x2,y2 (ruang frame asli)
-        xyxy = np.empty_like(boxes)
-        xyxy[:, 0] = (boxes[:, 0] - boxes[:, 2] / 2 - left) / r
-        xyxy[:, 1] = (boxes[:, 1] - boxes[:, 3] / 2 - top) / r
-        xyxy[:, 2] = (boxes[:, 0] + boxes[:, 2] / 2 - left) / r
-        xyxy[:, 3] = (boxes[:, 1] + boxes[:, 3] / 2 - top) / r
-        h, w = frame.shape[:2]
-        xyxy[:, [0, 2]] = xyxy[:, [0, 2]].clip(0, w - 1)
-        xyxy[:, [1, 3]] = xyxy[:, [1, 3]].clip(0, h - 1)
-
-        xywh = np.c_[xyxy[:, :2], xyxy[:, 2:] - xyxy[:, :2]]
-        idx = cv2.dnn.NMSBoxes(xywh.tolist(), scores.tolist(), self.conf, self.iou)
-        idx = np.array(idx).flatten().astype(int)
-        return sv.Detections(xyxy=xyxy[idx].astype(np.float32), confidence=scores[idx].astype(np.float32),
-                             class_id=cls[idx].astype(int))
+```
+python scripts/benchmark_capacity.py --module modules/ta1-perilaku-konsumen \
+    --rtsp "rtsp://127.0.0.1:8554/cam{i}" --cams 1,2,4,6,8,12,16 --config cfg/opt_full.yaml
 ```
 
-Validasi: jumlah & posisi kotak `OnnxDetector` vs `Detector` (Ultralytics) pada 100 frame harus hampir identik (IoU rata-rata > 0.95). Masukkan sebagai unit test.
+`scripts/compare_models.py` dan `compare_trackers.py` lama (membandingkan akurasi) dipensiunkan atau dipindah ke `scripts/legacy/`, karena perbandingan akurasi adalah ranah TA-1.
 
-### 4.3 Inferensi terpusat & batching — `aio_cctv/inference/server.py`
+## 4. Baseline (kondisi sebelum optimasi)
+
+Dari audit kode 2026-11-09, aplikasi saat ini:
+
+| Kondisi | Dampak ke kapasitas |
+|---|---|
+| `PipelineWorker` membuat `Pipeline` sendiri → **satu salinan model per kamera** | VRAM/RAM naik linear dengan N, GPU berganti konteks terus |
+| Inferensi batch = 1 per kamera | GPU kurang termanfaatkan |
+| Model PyTorch FP32 | Lebih lambat dari TensorRT FP16 / OpenVINO |
+| Default main-stream, decode resolusi penuh | CPU decode H.264/H.265 besar, resize mahal |
+| Annotate + `QImage` untuk setiap kamera yang berjalan | CPU terbuang untuk tile yang tidak terlihat |
+| Semua kamera = thread dalam **satu proses Python** | Kode modul berbasis Python bersaing di GIL |
+
+Ukur `N_max` baseline **sebelum** mengubah apa pun. Angka ini menjadi pembanding semua hasil.
+
+## 5. Teknik Optimasi
+
+### 5.1 InferenceServer bersama + batching dinamis — `aio_cctv/inference/server.py`
+
+Satu server **per bobot model**. Semua kamera yang memakai modul yang sama berbagi satu model.
 
 ```mermaid
 flowchart LR
-    C1[Worker Kamera 1] -- frame --> Q[(Antrean permintaan)]
-    C2[Worker Kamera 2] -- frame --> Q
-    C3[Worker Kamera N] -- frame --> Q
-    Q --> IS[InferenceServer thread<br/>kumpulkan ≤ B frame / ≤ 10 ms]
-    IS --> M[Model tunggal<br/>batch B]
-    M -- Detections --> C1 & C2 & C3
+    C1[Worker kamera 1<br/>modul TA-1] -- frame --> Q1[(Antrean model TA-1)]
+    C2[Worker kamera 2<br/>modul TA-1] -- frame --> Q1
+    C3[Worker kamera 3<br/>modul TA-2] -- frame --> Q2[(Antrean model TA-2)]
+    Q1 --> S1[InferenceServer TA-1<br/>≤ B frame / ≤ 10 ms]
+    Q2 --> S2[InferenceServer TA-2]
+    S1 -- Detections --> C1 & C2
+    S2 -- Detections --> C3
 ```
 
 ```python
@@ -143,15 +114,17 @@ from concurrent.futures import Future
 
 
 class InferenceServer(threading.Thread):
-    def __init__(self, model, max_batch: int = 8, max_wait_s: float = 0.01):
-        super().__init__(name="inference", daemon=True)
-        self.model, self.max_batch, self.max_wait_s = model, max_batch, max_wait_s
-        self.q: queue.Queue = queue.Queue()
+    """Satu model, banyak kamera. Tracker & modul tetap per kamera (state tidak boleh tercampur)."""
+
+    def __init__(self, detector, max_batch: int = 8, max_wait_s: float = 0.01, max_queue: int = 64):
+        super().__init__(name=f"inference-{detector.name}", daemon=True)
+        self.detector, self.max_batch, self.max_wait_s = detector, max_batch, max_wait_s
+        self.q: queue.Queue = queue.Queue(maxsize=max_queue)   # backpressure, lihat §5.7
         self._stop = threading.Event()
 
     def submit(self, frame) -> Future:
         fut: Future = Future()
-        self.q.put((frame, fut))
+        self.q.put_nowait((frame, fut))          # queue.Full -> worker men-drop frame ini
         return fut
 
     def run(self) -> None:
@@ -165,9 +138,8 @@ class InferenceServer(threading.Thread):
                     items.append(self.q.get(timeout=self.max_wait_s))
             except queue.Empty:
                 pass
-            frames = [f for f, _ in items]
             try:
-                results = self.model.detect_batch(frames)     # Ultralytics menerima list frame
+                results = self.detector.detect_batch([f for f, _ in items])
                 for (_, fut), det in zip(items, results):
                     fut.set_result(det)
             except Exception as e:
@@ -178,95 +150,168 @@ class InferenceServer(threading.Thread):
         self._stop.set()
 ```
 
-Worker kamera memanggil `server.submit(frame).result()`; **tracker & engine tetap per kamera** (state tracking tidak boleh tercampur).
+`Detector.detect_batch(frames)` = `self.model(frames, ...)` → `[sv.Detections.from_ultralytics(r) ...]`. Server dibuat dan dibagikan oleh `CameraManager` (*reference counting*: dibuat saat kamera pertama yang memakai model itu mulai, dihentikan saat kamera terakhir berhenti).
 
-> Tambahkan `detect_batch(frames)` pada `Detector`: `self.model(frames, ...)` lalu `[sv.Detections.from_ultralytics(r) for r in results]`.
+**Variabel yang diukur:** `max_batch` ∈ {1, 2, 4, 8, 16}, `max_wait_s` ∈ {0, 5, 10, 20 ms}. Ini *trade-off* antara throughput dan latensi.
 
-### 4.4 Strategi adaptif
-
-- **Auto-select backend** saat first-run: TensorRT jika NVIDIA + TensorRT tersedia → ONNX CUDA → OpenVINO (CPU Intel) → ONNX CPU.
-- **Auto-tune**: bila FPS proses < FPS target, turunkan imgsz / aktifkan stride; tampilkan di status bar.
-- **Frame stride & ByteTrack**: bila inferensi tiap *k* frame, set `frame_rate` tracker = `fps / k` agar buffer lost-track tetap benar dalam detik.
-
-### 4.5 (Opsional) VLM reasoning — Proposal §7 & §8.5
-
-Hanya bila semua target lain tercapai. Contoh fitur: tombol “Jelaskan kondisi” pada snapshot → model VLM lokal kecil (mis. Qwen2.5-VL 3B via Ollama/llama.cpp) → teks “Meja 3 kosong, ada gelas tertinggal”. Dijalankan **on-demand**, bukan per frame. Diposisikan sebagai **pengembangan lanjut** di Bab V bila tidak sempat.
-
-## 5. Packaging
-
-### 5.1 Varian distribusi
-
-| Varian | Isi | Ukuran perkiraan | Target |
-|---|---|---|---|
-| **Lite** | PyQt6 + OpenCV headless + onnxruntime (CPU/DirectML) + `yolo11n.onnx` | ± 200–300 MB | PC tanpa GPU NVIDIA |
-| **GPU** | + onnxruntime-gpu atau PyTorch CUDA / TensorRT | ± 1.5–3 GB | PC dengan GPU NVIDIA |
-
-### 5.2 PyInstaller (mode *one-folder*)
-
-`one-folder`, bukan `one-file` (one-file mengekstrak ratusan MB ke temp setiap start → lambat).
-
-```bash
-pip install pyinstaller
-pyinstaller main.py --name AIO-CCTV --windowed --noconfirm \
-  --add-data "configs:configs" --add-data "models/yolo11n.onnx:models" \
-  --add-data "aio_cctv/storage/schema.sql:aio_cctv/storage" \
-  --collect-submodules aio_cctv --icon assets/icon.ico
-```
-
-(Pada Windows pemisah `--add-data` adalah `;`.) Alternatif: **Nuitka** (`--standalone --enable-plugin=pyqt6`) → start lebih cepat, build lebih lama.
-
-Path resource harus kompatibel dengan mode beku:
+### 5.2 Backend inferensi (dari bobot YOLO11 rekan)
 
 ```python
-import sys
-from pathlib import Path
+from ultralytics import YOLO
 
-BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
+m = YOLO("modules/ta1-perilaku-konsumen/weights/best.pt")
+m.export(format="engine", imgsz=640, half=True, batch=8, dynamic=True)  # TensorRT FP16
+m.export(format="onnx", imgsz=640, dynamic=True, simplify=True)        # ONNX Runtime
+m.export(format="openvino", imgsz=640)                                 # CPU/iGPU Intel
 ```
 
-### 5.3 Installer
+- Ekspor dilakukan **host** saat modul pertama kali dipasang atau dijalankan (*first-run*). Hasilnya di-cache di `APP_DIR/cache/engines/<sha256 bobot>-<backend>-<imgsz>-b<batch>/`. File `.engine` terikat ke GPU & versi TensorRT, sehingga tidak dibawa di installer.
+- **Auto-select:** TensorRT (NVIDIA + TRT) → ONNX CUDA → OpenVINO (CPU Intel) → ONNX CPU → PyTorch.
+- Validasi wajib: output backend hasil ekspor vs `.pt` pada `samples/` modul (IoU rata-rata > 0.95, jumlah deteksi ±2%). Uji paritas Fase 6 diulang untuk setiap backend, dan selisih metrik modul dicatat. FP16 bisa sedikit mengubah hasil, sehingga perlu dilaporkan.
 
-- **Windows:** Inno Setup → `AIO-CCTV-Setup-x.y.z.exe`; shortcut Start Menu, opsi *jalankan saat Windows start*, uninstaller (tidak menghapus data pengguna kecuali dipilih). Tambahkan aturan firewall untuk discovery ONVIF (UDP 3702) bila perlu.
-- **Linux:** AppImage (paling portabel) atau `.deb`; file `.desktop` + autostart di `~/.config/autostart/`.
-- **Pengujian installer** di mesin/VM bersih (tanpa Python).
+### 5.3 Decode & stream
 
-### 5.4 Kesiapan operasional
+| Teknik | Implementasi | Catatan |
+|---|---|---|
+| **Sub-stream untuk analitik** | `PerfSettings.stream = "sub"` (Fase 8); main-stream hanya saat tile diperbesar (*dual-stream*) | Template merek Fase 4 sudah punya URL `sub` |
+| **HW decode** | PyAV: `codec_context` dengan `hwaccel` (NVDEC/VAAPI/QSV); OpenCV: `CAP_PROP_HW_ACCELERATION` (sudah ada flag `hw_accel` di `RTSPSource`) | Ukur CPU% H.264 vs H.265 |
+| **Resize saat decode** | Skala ke ≤ imgsz × rasio sebelum masuk antrean | Mengurangi memcpy & preprocessing |
+| **Thread decode** | `thread_type = "AUTO"` (sudah ada) vs `"SLICE"` | Ukur pada N besar: terlalu banyak thread → kontensi |
+
+### 5.4 Frame stride & FPS adaptif
+
+- Proses setiap *k* frame, atau tetapkan `target_fps` per kamera (Fase 8, default 10). Frame di luar jadwal dibuang **sebelum** decode penuh bila memungkinkan, atau minimal sebelum inferensi.
+- `CameraContext.fps` diisi **FPS efektif**, supaya buffer lost-track pada tracker rekan tetap benar dalam satuan detik (kontrak Fase 6 §4.3).
+- Dampaknya terhadap kualitas tracking (ID switch) **bukan diukur di TA ini**. Cukup sepakati `F_min` dengan rekan (§2), lalu jangan turun di bawahnya.
+
+### 5.5 Render hemat
+
+- Annotate + `QImage` **hanya untuk tile yang terlihat**. Kamera di halaman lain atau saat jendela diminimalkan tetap dianalisis tanpa render.
+- `display_fps` (sudah ada, default 15) diturunkan ke 5–10 untuk grid besar (3×3, 4×4).
+- Resize ke ukuran tile **sebelum** konversi `QImage`.
+
+### 5.6 Proses vs thread (GIL)
+
+Kode modul (tracker, Re-ID, analitik) sebagian besar Python/NumPy. Pada N besar, satu proses bisa mentok di GIL sementara GPU menganggur. Bandingkan tiga arsitektur:
+
+| Arsitektur | Deskripsi | Kompleksitas |
+|---|---|---|
+| **A. Thread** (saat ini) | Semua worker + InferenceServer di satu proses | Rendah |
+| **B. Proses per grup kamera** | `multiprocessing` (spawn): tiap proses menjalankan decode + modul untuk ≤ G kamera; inferensi tetap di proses utama; frame dikirim lewat `multiprocessing.shared_memory` (ring buffer), hasil kecil lewat `Queue` | Sedang |
+| **C. Proses per grup + inferensi per proses** | Tiap proses punya InferenceServer sendiri | Rendah–sedang, tetapi model terduplikasi per proses |
+
+Pilih berdasarkan pengukuran. Implementasikan B hanya bila A terbukti mentok di CPU (satu core 100%, GPU < 60%) sebelum memenuhi `N_max` yang diharapkan.
+
+### 5.7 Penjadwalan, backpressure & degradasi bertahap
+
+- Antrean inferensi berbatas (`max_queue`). Bila penuh, **frame terbaru menggantikan yang lama** per kamera (latest-frame), sehingga latensi tidak menumpuk.
+- **Fairness:** server mengambil frame secara *round-robin* per kamera, supaya satu kamera berfps tinggi tidak memonopoli batch.
+- **Degradasi bertahap** saat beban berlebih: turunkan `target_fps` semua kamera secara merata (tidak di bawah `F_min`). Bila masih berat, kamera berprioritas `low` dijeda dan alert `overload` (Fase 7) dikirim. Jangan biarkan semua kamera lambat bersamaan.
+- **Auto-tune saat first-run:** jalankan benchmark singkat (30 s) untuk memilih backend, `max_batch`, dan rekomendasi jumlah kamera. Tampilkan "PC ini direkomendasikan untuk ±N kamera dengan modul X".
+
+## 6. Integrasi DVR/NVR (RM-2)
+
+Kondisi saat ini: `configs/camera_brands.json` menulis `channel=1` / `Channels/101` secara tetap. Akibatnya, hanya channel pertama DVR yang bisa dipakai.
+
+| Pekerjaan | Rincian |
+|---|---|
+| Template URL berparameter channel | `{channel}` & `{stream}`, mis. Hikvision `/Streaming/Channels/{channel}0{stream}` (101, 102, 201…), Dahua `cam/realmonitor?channel={channel}&subtype={stream}` |
+| Dialog **Tambah DVR/NVR** | IP + akun sekali → jumlah channel (ONVIF `GetProfiles`/`GetVideoSources` bila tersedia, atau input manual) → probe tiap channel paralel (`QThreadPool`) → pilih channel → membuat N kamera yang berbagi kredensial (keyring sekali) |
+| Pengelompokan di GUI | Kamera dikelompokkan per perangkat DVR; status "DVR offline" vs "channel tanpa sinyal" dibedakan |
+| Batas perangkat | DVR sering membatasi jumlah stream RTSP bersamaan dan total bandwidth keluaran. Catat batas tiap model yang diuji; default ke **sub-stream** untuk semua channel |
+| Reconnect terkoordinasi | Bila semua channel satu DVR putus bersamaan, backoff dilakukan per perangkat (bukan N koneksi ulang serentak yang membanjiri DVR) |
+
+Uji minimal: **1 DVR fisik (≥ 4 channel)** dengan merek yang tersedia (Hikvision/Dahua/XMEye), ditambah kamera IP dari Fase 4.
+
+## 7. Matriks Eksperimen (Ablation)
+
+Setiap baris **menambahkan** satu teknik ke baris sebelumnya. Ukur `N_max` dan sumber daya pada N tetap (mis. N = 8).
+
+| # | Konfigurasi | `N_max` | FPS/kamera (N=8) | Latensi p95 | CPU % | GPU % | VRAM | RAM |
+|---|---|---|---|---|---|---|---|---|
+| 0 | Baseline (§4) | | | | | | | |
+| 1 | + InferenceServer bersama (batch 1) | | | | | | | |
+| 2 | + batching dinamis (B terbaik) | | | | | | | |
+| 3 | + TensorRT FP16 / OpenVINO | | | | | | | |
+| 4 | + sub-stream | | | | | | | |
+| 5 | + HW decode | | | | | | | |
+| 6 | + FPS adaptif (target 10) | | | | | | | |
+| 7 | + render hemat | | | | | | | |
+| 8 | + multi-proses (bila dipakai) | | | | | | | |
+
+Dijalankan pada **≥ 2 kelas perangkat**:
+
+| Perangkat | Spesifikasi | Backend utama |
+|---|---|---|
+| PC GPU (lab) | Ryzen 5 5600 + RTX 5060 (logbook Fase 0) | TensorRT FP16 |
+| PC/laptop tanpa GPU diskrit | mis. Intel Core i5 + iGPU | OpenVINO |
+| *(opsional)* Mini PC / Jetson | — | TensorRT |
+
+…dan untuk **setiap modul** (baseline, TA-1, TA-2), karena `module_ms` (mis. Re-ID TA-2) bisa menjadi hambatan utama. Laporkan juga **kamera per watt** bila alat ukur daya tersedia.
+
+## 8. Packaging
+
+### 8.1 Varian distribusi
+
+| Varian | Isi | Perkiraan ukuran | Target |
+|---|---|---|---|
+| **Lite** | PyQt6 + OpenCV/PyAV + onnxruntime/OpenVINO | ± 300–500 MB | PC tanpa GPU NVIDIA |
+| **GPU** | + PyTorch CUDA / TensorRT | ± 2–3 GB | PC dengan GPU NVIDIA |
+
+Modul yang memerlukan PyTorch saat runtime (mis. Re-ID TA-2 via boxmot) **tidak bisa** berjalan di varian Lite, kecuali rekan mengekspor Re-ID ke ONNX. Bahas ini dengan TA-2 dan dokumentasikan sebagai batasan.
+
+### 8.2 Modul dalam distribusi
+
+- Modul **tidak dibundel** ke executable. Modul dipasang sebagai folder/ZIP di `APP_DIR/modules/` (menu Modul, Fase 6), sehingga pembaruan modul tidak memerlukan installer baru.
+- `requirements` setiap modul yang disepakati (Fase 6 §7) sudah termasuk di build. Modul yang meminta paket di luar daftar ditandai tidak valid.
+
+### 8.3 Build
+
+PyInstaller mode **one-folder** (atau Nuitka `--standalone --enable-plugin=pyqt6`). Resource dibaca melalui `BASE = Path(getattr(sys, "_MEIPASS", ...))`. Installer: Inno Setup (Windows) dan AppImage (Linux), dan diuji di mesin/VM bersih tanpa Python.
+
+### 8.4 Kesiapan operasional
 
 | Aspek | Implementasi |
 |---|---|
-| Logging | `logging.handlers.RotatingFileHandler` di `APP_DIR/logs`, 5 × 5 MB; password dimask (Fase 4) |
-| Crash handler | `sys.excepthook` → simpan traceback + tampilkan dialog “kirim log ke pengembang (manual)” |
-| Watchdog | Timer di `CameraManager`: worker tanpa frame > 30 s → restart worker |
-| Auto-start & tray | Minimize ke tray, tetap berjalan analitik di latar belakang |
-| Versi | `aio_cctv.__version__`, SemVer, `CHANGELOG.md`, tampil di menu Tentang |
-| Konfigurasi hilang/rusak | Validasi Pydantic + backup otomatis profil sebelum disimpan |
+| Logging | `RotatingFileHandler` 5 × 5 MB; password di URL dimask |
+| Crash handler | `sys.excepthook` → simpan traceback + dialog |
+| Watchdog | Worker tanpa frame > 30 s → restart worker; InferenceServer mati → restart + alert |
+| Tray & auto-start | Analitik tetap berjalan saat jendela ditutup ke tray |
+| Versi | `aio_cctv.__version__`, `CHANGELOG.md`, menu Tentang (beserta daftar modul & versinya) |
 
-### 5.5 Soak test
+### 8.5 Soak test
 
-Jalankan build rilis **24–72 jam** dengan 4 kamera: catat tiap menit RSS memori, VRAM, CPU/GPU %, FPS per kamera, jumlah reconnect (tabel `camera_health` Fase 6 sudah merekam sebagian). Target: memori stabil (tidak naik monoton), tidak ada crash.
+Build rilis berjalan **24–72 jam** dengan N = `N_max` − 1 kamera (campuran kamera nyata, channel DVR, dan simulasi). Catat RSS, VRAM, CPU/GPU, FPS, dan reconnect per menit (`camera_health`, `system_minute`). Targetnya: memori tidak naik monoton, tidak ada crash, dan kriteria §2 tetap terpenuhi.
 
-## 6. Keluaran (Deliverables)
+## 9. Keluaran (Deliverables)
 
 | Keluaran | Lokasi |
 |---|---|
-| `benchmark.py` + tabel profiling sebelum/sesudah | `scripts/`, `docs/logbook/` |
-| `OnnxDetector`, `InferenceServer`, auto-select backend | `aio_cctv/inference/` |
-| Matriks eksperimen optimasi (≥2 perangkat) | `docs/logbook/` (bahan RM-4) |
-| Installer Windows & AppImage Linux | `dist/` (rilis GitHub) |
+| `InferenceServer`, ekspor & auto-select backend, cache engine | `aio_cctv/inference/` |
+| Dukungan DVR multi-channel + dialog Tambah DVR | `aio_cctv/sources/`, `configs/camera_brands.json`, `aio_cctv/gui/dialogs/` |
+| `sim_cameras.sh`, `benchmark_capacity.py` | `scripts/` |
+| Tabel ablation + grafik `N_max` per perangkat × modul | `docs/logbook/` (bahan Bab IV, RM-3) |
+| Installer Windows & AppImage Linux | rilis GitHub |
 | Grafik soak test | `docs/logbook/` |
 
-## 7. Definition of Done
+## 10. Definition of Done
 
-- [ ] Target **≥ 20 FPS** (Proposal §10) tercapai di GPU kelas menengah untuk 1 kamera; jumlah kamera maksimum per perangkat terdokumentasi.
-- [ ] Build Lite berjalan di PC tanpa Python & tanpa GPU.
+- [ ] `N_max` baseline dan sesudah optimasi terukur pada ≥ 2 perangkat × ≥ 2 modul.
+- [ ] Peningkatan `N_max` dari setiap teknik terdokumentasi (tabel §7 lengkap).
+- [ ] Satu model per bobot walau N kamera (VRAM tidak naik linear terhadap N).
+- [ ] DVR fisik ≥ 4 channel berjalan bersamaan.
+- [ ] Build Lite berjalan di PC tanpa Python & tanpa GPU (dengan modul baseline/ONNX).
 - [ ] Soak test 24 jam lulus.
 - [ ] Tag `v1.0.0-rc1`.
 
-## 8. Risiko & Mitigasi
+## 11. Risiko & Mitigasi
 
 | Risiko | Mitigasi |
 |---|---|
-| Antivirus menandai exe PyInstaller (false positive) | Gunakan Nuitka / tanda tangan kode bila ada; laporkan false positive |
-| Versi CUDA/TensorRT tidak cocok di PC pengguna | Default ke ONNX Runtime; TensorRT sebagai opsi lanjutan |
-| Perbedaan hasil ONNX vs PyTorch | Unit test pembanding (§4.2) |
-| Ukuran installer terlalu besar | Varian Lite; unduh model saat first-run |
+| Hambatan utama ada di modul rekan (`module_ms`), bukan di host | Laporkan terpisah; kapasitas baseline menunjukkan batas host; beri umpan balik ke rekan (mis. Re-ID hanya untuk track baru/ambigu) |
+| Batching menaikkan latensi | `max_wait_s` kecil + ukur p95; batch dinamis |
+| Ekspor TensorRT gagal di PC pengguna | Auto-select jatuh ke ONNX CUDA; pesan jelas |
+| Hasil FP16 berbeda dari FP32 | Uji paritas per backend; opsi paksa FP32 |
+| DVR menolak banyak koneksi bersamaan | Sub-stream default; batas koneksi per perangkat dapat diatur; relay via MediaMTX |
+| Simulator memakan CPU PC uji | Simulator di PC kedua, atau `-c copy` dari file pre-encoded |
+| Antivirus menandai executable | Nuitka / tanda tangan kode; laporkan false positive |

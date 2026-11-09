@@ -1,246 +1,167 @@
-# FASE 9 — Pengujian & Evaluasi
+# FASE 10 — Pengujian & Evaluasi
 
-> Sebelumnya: [FASE-08](FASE-08-optimasi-packaging.md) · Kembali ke [Roadmap](00-ROADMAP.md) · Berikutnya: [FASE-10 Laporan TA](FASE-10-dokumentasi-laporan-ta.md)
-> Referensi Proposal: **§10** (Rencana Pengujian & Metrik — acuan utama), **§13** (Dataset publik + “Strategi tugas akhir”, `scripts/eval_tracking.py`), **§4** (RM-1 s.d. RM-4), **§9** (Metodologi langkah 5), **§5** (evaluasi pada rekaman/video sampel + uji lapangan terbatas)
-> Estimasi: **3 minggu** · Milestone: **M5 — Siap Rilis & Terukur**
+> Sebelumnya: [FASE-09](FASE-09-optimasi-sumber-daya-packaging.md) · Kembali ke [Roadmap](00-ROADMAP.md) · Berikutnya: [FASE-11 Laporan TA](FASE-11-dokumentasi-laporan-ta.md)
+> Referensi: rumusan masalah **RM-1 s.d. RM-3** ([Roadmap §1](00-ROADMAP.md#usulan-rumusan-masalah-sesuaikan-dengan-proposal-resmi-pasca-sidang)), Proposal **§10** (bagian kinerja & skalabilitas), **§5** (uji lapangan terbatas)
+> Estimasi: **3 minggu** · Milestone: **M5 — Terukur & siap rilis**
+> *Revisi 2026-11-09: dahulu FASE-09. Evaluasi **akurasi model dan tracking** (mAP, MOTA/IDF1, error dwell/counting pada MOT17/MOT20/Mall) **dihapus** dari TA ini karena merupakan ranah TA-1 & TA-2. Diganti dengan uji integrasi modul, keandalan RTSP/DVR, dan kapasitas sumber daya.*
 
 ---
 
 ## 1. Tujuan
 
-Menghasilkan **bukti kuantitatif** yang menjawab setiap Rumusan Masalah (Proposal §4) dengan metrik yang direncanakan di Proposal §10, ditambah pengujian khusus fokus akhir (RTSP pada kamera konsumer & kualitas aplikasi desktop).
+Menghasilkan **bukti kuantitatif** untuk setiap rumusan masalah TA ini, dengan memisahkan secara tegas apa yang diukur di sini dan apa yang menjadi ranah rekan:
+
+| Diukur di TA ini | **Tidak** diukur di TA ini (dikutip dari TA-1/TA-2 bila perlu) |
+|---|---|
+| Kebenaran integrasi modul (paritas), isolasi error, ganti modul tanpa ubah kode | mAP / precision / recall model YOLO11 |
+| Keandalan RTSP kamera IP & DVR (latensi, pemulihan, uptime) | MOTA, IDF1, HOTA, ID switch |
+| Kapasitas kamera per PC, pemakaian CPU/GPU/RAM, latensi end-to-end, kontribusi tiap optimasi | Akurasi dwell, counting, klasifikasi aktivitas/produktivitas |
+| Fungsional (black-box) & usability (SUS) | Validitas metrik perilaku konsumen/produktivitas |
 
 ## 2. Peta Evaluasi
 
-| RM (Proposal §4) | Aspek (Proposal §10) | Metrik | Data | Skrip |
+| RM | Aspek | Metrik | Data / alat | Skrip |
 |---|---|---|---|---|
-| RM-1 RTSP → data real-time | Integrasi RTSP *(tambahan fokus akhir)* | Kompatibilitas merek, latensi, waktu pulih, uptime 24 jam | Kamera fisik + MediaMTX | `rtsp_probe.py`, `rtsp_latency.py`, `camera_health` |
-| RM-2 MOT & occlusion | Akurasi deteksi | Precision, Recall, mAP@0.5 | Frame berlabel dari rekaman sendiri / video YouTube (+ CrowdHuman subset) | `eval_detection.py` |
-| RM-2 | Akurasi tracking | **MOTA, IDF1, ID switches** | **MOT17 / MOT20** (Proposal §13) | `eval_tracking.py` |
-| RM-2 | Akurasi dwell time | MAE (s), MAPE (%) — target **< 10%** | Rekaman sendiri + stopwatch manual | `eval_dwell.py` |
-| RM-2 | Akurasi counting | % error in/out; MAE jumlah orang | Rekaman sendiri; **Mall Dataset** (counting) | `eval_counting.py` |
-| RM-3 konfigurabilitas | **Kegenerikan** | Waktu & langkah adaptasi, **0 baris kode** | ≥2 vertikal | protokol Fase 7 §7 |
-| RM-4 akurasi & FPS | Kinerja | FPS, latensi, CPU/GPU/RAM — target **≥ 20 FPS** RTX 3060 | Semua | `benchmark.py` (Fase 8) |
-| RM-4 | Skalabilitas | Kamera maks per node | 1→N kamera | `benchmark.py --cams N` |
-| — | Fungsional aplikasi | Black-box test | — | tabel uji |
-| — | Usability | **SUS** (System Usability Scale) | ≥ 10 responden | kuesioner |
+| **RM-1** | Kepatuhan modul | Lulus/gagal per butir `check_module` | Paket baseline, TA-1, TA-2 | `check_module.py` (F6) |
+| RM-1 | **Paritas integrasi** | Selisih jumlah event per tipe; selisih maks metrik; per backend | `samples/` + `expected.jsonl` dari rekan | `tests/test_parity.py` |
+| RM-1 | Tanpa ubah kode | Baris kode host diubah (harus 0), waktu & langkah konfigurasi | Protokol Fase 8 §7 | `git diff --stat` |
+| RM-1 | Isolasi error | Kamera lain tetap ≥ `F_min` saat satu modul crash | Modul uji yang melempar exception | `tests/test_isolation.py` |
+| RM-1 | Fungsional | Black-box (§5.1) | — | tabel uji |
+| RM-1 | Usability | **SUS**, tingkat keberhasilan tugas, waktu tugas | ≥ 10 responden | kuesioner |
+| **RM-2** | Kompatibilitas | Merek/model kamera & DVR yang berhasil, beserta URL & codec | Perangkat fisik | matriks Fase 4 + DVR Fase 9 |
+| RM-2 | Latensi | Glass-to-glass (ms), rata-rata ± SD | Stopwatch di depan kamera vs layar | `rtsp_latency.py` (F4) |
+| RM-2 | Pemulihan | Waktu pulih setelah putus (s); kabel dicabut, `tc netem` loss/delay | Kamera fisik + MediaMTX | uji Fase 4 |
+| RM-2 | Uptime | % waktu streaming selama 24 jam; reconnect/24 jam | `camera_health` | query |
+| RM-2 | DVR multi-channel | Channel bersamaan yang stabil per DVR; bandwidth | DVR ≥ 4 channel | Fase 9 §6 |
+| **RM-3** | **Kapasitas** | `N_max` per perangkat × modul (kriteria Fase 9 §2) | Simulasi MediaMTX + kamera nyata | `benchmark_capacity.py` |
+| RM-3 | Kontribusi optimasi | Δ`N_max`, Δ CPU/GPU/VRAM per teknik | Matriks ablation Fase 9 §7 | `benchmark_capacity.py` |
+| RM-3 | Latensi pipeline | `latency_ms` p50/p95 vs N | `camera_health` | query |
+| RM-3 | Stabilitas | Memori & FPS selama 24–72 jam | Soak test Fase 9 §8.5 | query + grafik |
 
-## 3. Persiapan Data
+## 3. Persiapan
 
-### 3.1 Dataset publik (Proposal §13)
+### 3.1 Perangkat
 
-| Dataset | Dipakai untuk | Catatan |
+| Kategori | Minimal | Keterangan |
 |---|---|---|
-| MOT17 (train, 7 sekuens) | MOTA/IDF1 baseline standar | GT publik tersedia hanya untuk *train* — cukup untuk evaluasi (tanpa training) |
-| MOT20 (train, 4 sekuens) | Kerumunan padat (mirip kafe/ritel ramai) | Sangat berat → cukup jalankan pada potongan / resolusi lebih kecil bila perlu |
-| Mall Dataset (CUHK) | Counting per frame (anotasi titik kepala) | Bukan tracking — bandingkan **jumlah orang per frame** |
-| CrowdHuman (val, subset) | (Opsional) deteksi pada occlusion berat | Lisensi riset |
+| PC edge | 2 kelas (GPU NVIDIA & tanpa GPU diskrit) | Spesifikasi lengkap dicatat (CPU, GPU, RAM, OS, driver) |
+| Kamera IP | ≥ 2 merek berbeda dengan RTSP | Dari matriks Fase 4 |
+| DVR/NVR | ≥ 1 unit, ≥ 4 channel | Pinjam dari lab/toko/kerabat bila perlu |
+| PC simulator | 1 (boleh laptop) | Menjalankan MediaMTX + ffmpeg (Fase 9 §3.2) |
+| Jaringan | Switch/router LAN | Catat topologi untuk diagram deployment |
 
-> Cek lisensi setiap dataset (Proposal §13: sebagian besar non-komersial). DukeMTMC **tidak** dipakai.
+### 3.2 Modul & data
 
-### 3.2 Data sendiri (bukti di dunia nyata)
+- Modul **baseline**, **TA-1 v1**, **TA-2 v1** (atau versi terakhir yang tersedia; catat versi & hash).
+- Video uji per modul, sesuai domain (area komersial untuk TA-1, area kerja untuk TA-2). Sebaiknya video yang sama dengan yang dipakai rekan, agar uji paritas bermakna.
+- Untuk simulasi kapasitas: satu klip 1280×720 @15 FPS yang mewakili kepadatan tipikal. **Kepadatan orang memengaruhi `module_ms`**, jadi gunakan klip sepi dan ramai lalu laporkan keduanya.
 
-- Rekam **≥ 2 lokasi berbeda** (mis. kafe + minimarket, sesuai Proposal §13 “Strategi tugas akhir”) dengan kamera konsumer yang sama dengan Fase 4, **dengan izin pemilik** dan pemberitahuan area terpantau (Proposal §11).
-- Durasi total ≥ 60 menit, pilih 3–5 klip 5 menit dengan kondisi berbeda (sepi, ramai, cahaya redup).
-- Video YouTube referensi (Proposal §2) dipakai sebagai **data pendahuluan**; laporan tetap memprioritaskan rekaman sendiri untuk klaim akurasi.
+## 4. Prosedur Uji Utama
 
-### 3.3 Anotasi ground truth
+### 4.1 Uji paritas (RM-1)
 
-| GT | Alat | Isi |
-|---|---|---|
-| Bounding box orang (deteksi) | CVAT / Label Studio / Roboflow (ekspor YOLO) | 200–500 frame sampel |
-| Dwell | Spreadsheet + stopwatch / pemutar video dengan timestamp | per orang: zona, waktu masuk, waktu keluar |
-| Counting | Spreadsheet | waktu tiap orang melintas garis + arah |
+1. Rekan menjalankan modulnya **di luar aplikasi** pada `samples/demo.mp4` → `expected.jsonl` (per frame: metrik & event).
+2. Host menjalankan modul yang sama melalui pipeline aplikasi dengan stride 1 dan backend `.pt`.
+3. Bandingkan: jumlah event per tipe (harus sama), nilai metrik per frame (|Δ| ≤ 1e-6), dan `track_id` per frame (harus sama untuk tracker deterministik).
+4. Ulangi untuk backend TensorRT FP16 / OpenVINO. Selisih yang muncul di sini **dilaporkan apa adanya** sebagai konsekuensi optimasi, beserta besarnya.
 
-Idealnya 2 anotator untuk sebagian data → laporkan kesepakatan antar-anotator.
-
-## 4. Skrip Evaluasi
-
-### 4.1 Tracking — `scripts/eval_tracking.py` (disebut di Proposal §13)
-
-```python
-"""Evaluasi MOT (MOTA, IDF1, ID switch) pada sekuens MOT17/MOT20 format MOTChallenge.
-
-Contoh: python scripts/eval_tracking.py data/datasets/MOT17/train --tracker bytetrack
-"""
-import argparse
-import configparser
-from pathlib import Path
-
-import cv2
-import motmetrics as mm
-import numpy as np
-import pandas as pd
-
-from aio_cctv.inference.detector import Detector
-from aio_cctv.tracking.tracker import ByteTrackTracker
-
-COLS = ["frame", "id", "x", "y", "w", "h", "conf", "cls", "vis"]
-
-
-def load_gt(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path, header=None, names=COLS)
-    return df[(df.conf == 1) & (df.cls == 1)]           # hanya pejalan kaki yang dinilai
-
-
-def eval_sequence(seq: Path, detector: Detector) -> mm.MOTAccumulator:
-    ini = configparser.ConfigParser()
-    ini.read(seq / "seqinfo.ini")
-    fps = float(ini["Sequence"]["frameRate"])
-    tracker = ByteTrackTracker(fps)
-    gt = load_gt(seq / "gt" / "gt.txt")
-    acc = mm.MOTAccumulator(auto_id=False)
-
-    for i, img_path in enumerate(sorted((seq / "img1").glob("*.jpg")), start=1):
-        det = tracker.update(detector(cv2.imread(str(img_path))))
-        g = gt[gt.frame == i]
-        if len(det):
-            hyp_xywh = np.c_[det.xyxy[:, :2], det.xyxy[:, 2:] - det.xyxy[:, :2]]
-            hyp_ids = det.tracker_id.tolist()
-        else:
-            hyp_xywh, hyp_ids = np.empty((0, 4)), []
-        dist = mm.distances.iou_matrix(g[["x", "y", "w", "h"]].values, hyp_xywh, max_iou=0.5)
-        acc.update(g.id.tolist(), hyp_ids, dist, frameid=i)
-    return acc
-
-
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("root", help="folder berisi sekuens, mis. MOT17/train")
-    ap.add_argument("--model", default="models/yolo11n.pt")
-    ap.add_argument("--filter", default="FRCNN", help="MOT17: pakai satu varian detektor saja")
-    args = ap.parse_args()
-
-    detector = Detector(args.model, conf=0.25)
-    seqs = [p for p in sorted(Path(args.root).iterdir())
-            if p.is_dir() and (args.filter in p.name or p.name.startswith("MOT20"))]
-    accs, names = [], []
-    for seq in seqs:
-        print("evaluasi", seq.name)
-        accs.append(eval_sequence(seq, detector))
-        names.append(seq.name)
-
-    mh = mm.metrics.create()
-    summary = mh.compute_many(accs, names=names, generate_overall=True,
-                              metrics=["mota", "motp", "idf1", "num_switches",
-                                       "precision", "recall", "num_false_positives", "num_misses"])
-    print(mm.io.render_summary(summary, formatters=mh.formatters,
-                               namemap=mm.io.motchallenge_metric_names))
-    summary.to_csv("outputs/eval_tracking.csv")
-
-
-if __name__ == "__main__":
-    main()
-```
-
-> Sekuens MOT17 hadir dalam 3 salinan (DPM/FRCNN/SDP — hanya berbeda deteksi publik). Karena kita memakai detektor sendiri, cukup evaluasi satu salinan (`--filter FRCNN`) agar tidak terhitung 3×.
-
-Variasi yang dilaporkan: ByteTrack vs BoT-SORT (Fase 3), yolo11n vs m, imgsz 640 vs 480, parameter `lost_track_seconds`.
-
-### 4.2 Dwell — `scripts/eval_dwell.py`
-
-Pencocokan sesi sistem ↔ GT: untuk setiap sesi GT (zona, masuk, keluar), cari sesi sistem di zona sama dengan **overlap waktu terbesar** (IoU temporal ≥ 0.5). Laporkan:
-
-- **MAE** = rata-rata |durasi_sistem − durasi_GT| (detik)
-- **MAPE** = rata-rata |selisih| / durasi_GT × 100% → target Proposal §10: **< 10%**
-- Jumlah sesi **terpecah** (1 GT → >1 sesi sistem, biasanya akibat ID switch) dan **terlewat**.
-
-Bila satu GT dicocokkan dengan beberapa sesi sistem (terpecah), **jumlahkan** durasinya dan laporkan juga versi “tanpa penggabungan” agar dampak ID switch terlihat.
-
-### 4.3 Counting — `scripts/eval_counting.py`
-
-- Garis masuk/keluar: `error% = |sistem − GT| / GT × 100` per arah, per klip; juga per interval 15 menit.
-- Mall Dataset: jumlah orang per frame (seluruh frame sebagai satu zona) → MAE & RMSE; bandingkan dengan angka baseline di literatur counting.
-
-### 4.4 Deteksi — `scripts/eval_detection.py`
-
-Gunakan validator Ultralytics pada data berlabel format YOLO:
-
-```python
-from ultralytics import YOLO
-
-metrics = YOLO("models/yolo11n.pt").val(data="data/datasets/own_person/data.yaml",
-                                         classes=[0], imgsz=640, conf=0.001, iou=0.6)
-print(metrics.box.map50, metrics.box.map, metrics.box.mp, metrics.box.mr)
-```
-
-(`data.yaml` memetakan kelas 0 = person agar kompatibel dengan COCO.)
-
-## 5. Pengujian Sistem (fokus akhir: desktop + RTSP)
-
-### 5.1 RTSP & kamera konsumer
-
-Gunakan data Fase 4 (matriks kompatibilitas, latensi, uji `tc netem`, uji cabut kabel) dan ulangi dengan **build rilis** (Fase 8). Tambahkan ringkasan statistik:
-
-| Kamera | Latensi rata-rata ± SD (ms) | Waktu pulih rata-rata (s) | Uptime 24 jam (%) | Reconnect / 24 jam | FPS diterima |
+| Modul | Backend | Δ event (per tipe) | Δ metrik maks | Track ID identik? | Status |
 |---|---|---|---|---|---|
+| Baseline | PyTorch | | | | |
+| Baseline | TensorRT FP16 | | | | |
+| TA-1 | PyTorch | | | | |
+| TA-1 | TensorRT FP16 | | | | |
+| TA-2 | PyTorch | | | | |
+| TA-2 | TensorRT FP16 | | | | |
 
-### 5.2 Kinerja & skalabilitas
+### 4.2 Kapasitas (RM-3)
 
-| Perangkat | Backend | Kamera | FPS/kamera | Latensi (ms) | CPU % | GPU % | RAM/VRAM |
-|---|---|---|---|---|---|---|---|
-| Laptop i5 tanpa GPU | ONNX CPU / OpenVINO | 1, 2 | | | | | |
-| PC RTX 3060 | TensorRT FP16 | 1, 4, 8 | | | | | |
+Ikuti Fase 9 §3.3 dan §7. Hasil akhir yang dicari:
 
-Kesimpulan yang dicari: **jumlah kamera maksimum** per perangkat dengan FPS ≥ ambang (mis. 10 FPS per kamera cukup untuk analitik orang indoor).
-
-### 5.3 Black-box testing (fungsional)
-
-| ID | Fitur | Skenario | Hasil yang diharapkan | Hasil | Status |
+| Perangkat | Modul | `N_max` baseline | `N_max` teroptimasi | Peningkatan | Hambatan utama |
 |---|---|---|---|---|---|
-| BB-01 | Tambah kamera | Isi merek Tapo, IP, akun benar → Tes Koneksi | Info codec/resolusi + snapshot tampil | | |
-| BB-02 | Tambah kamera | Password salah | Pesan “Username/password salah” | | |
-| BB-03 | Discovery | Klik “Cari di jaringan” | Kamera ONVIF di LAN terdaftar | | |
-| BB-04 | Editor zona | Gambar zona 4 titik, simpan | Zona tersimpan & tampil di live view | | |
-| BB-05 | Editor zona | Simpan poligon 2 titik | Ditolak dengan pesan | | |
-| BB-06 | Live | Cabut kabel kamera 30 s | Status reconnecting → streaming tanpa restart | | |
-| BB-07 | Dwell | Orang duduk di zona meja | Label durasi bertambah | | |
-| BB-08 | Counting | Orang melewati garis | IN bertambah 1 | | |
-| BB-09 | Alert | Antrean > ambang selama for_s | Notifikasi tray muncul sekali | | |
-| BB-10 | Dashboard | Pilih rentang 7 hari | Grafik tampil < 1 s | | |
-| BB-11 | Laporan | Ekspor PDF harian | File PDF benar | | |
-| BB-12 | Template | Wizard F&B | Profil + aturan + dashboard terbentuk | | |
-| BB-13 | Import/Export | Export lalu import profil | Zona identik | | |
-| BB-14 | Privasi | Aktifkan blur | Semua orang ter-blur di tampilan & snapshot | | |
-| BB-15 | Instalasi | Pasang di PC bersih | Aplikasi berjalan tanpa Python | | |
+| PC RTX 5060 | Baseline | | | ×… | CPU decode / GPU / GIL / modul |
+| PC RTX 5060 | TA-1 | | | | |
+| PC RTX 5060 | TA-2 | | | | |
+| PC tanpa GPU | Baseline | | | | |
+| PC tanpa GPU | TA-1 | | | | |
 
-### 5.4 Usability — SUS
+Grafik wajib: (a) FPS min per kamera vs N, (b) latensi p95 vs N, (c) VRAM vs N untuk baseline vs InferenceServer, (d) *waterfall* kontribusi tiap teknik terhadap `N_max`.
 
-- Responden ≥ 10 (target: pemilik/staf UMKM, mahasiswa non-IT).
-- Tugas: (1) tambah kamera, (2) pasang template kafe & gambar zona, (3) baca jam tersibuk di dashboard, (4) ekspor laporan.
-- Catat **tingkat keberhasilan tugas** & **waktu penyelesaian**, lalu isi 10 butir SUS.
-- Skor SUS = ((Σ(butir ganjil − 1) + Σ(5 − butir genap)) × 2.5). > 68 = di atas rata-rata.
+### 4.3 Keandalan RTSP/DVR (RM-2)
 
-### 5.5 Uji lapangan terbatas (Proposal §5)
+Ulangi uji Fase 4 dengan **build rilis** dan tambahkan DVR:
 
-Pasang aplikasi di **1 lokasi nyata** selama ≥ 3 hari (dengan izin). Bandingkan jam sibuk/traffic dari sistem dengan persepsi/catatan pemilik usaha (mis. data transaksi kasir per jam sebagai proksi) — bahan diskusi nilai bisnis di Bab IV.
+| Perangkat | Stream | Latensi ± SD (ms) | Waktu pulih (s) | Uptime 24 jam (%) | Reconnect / 24 jam | FPS diterima |
+|---|---|---|---|---|---|---|
+| Kamera A | sub | | | | | |
+| Kamera B | sub | | | | | |
+| DVR ch1–ch4 | sub | | | | | |
+
+## 5. Pengujian Sistem
+
+### 5.1 Black-box (fungsional)
+
+| ID | Fitur | Skenario | Hasil yang diharapkan |
+|---|---|---|---|
+| BB-01 | Tambah kamera | Merek + IP + akun benar → Tes Koneksi | Codec/resolusi + snapshot tampil |
+| BB-02 | Tambah kamera | Password salah | Pesan "Username/password salah" |
+| BB-03 | Discovery | "Cari di jaringan" | Kamera ONVIF di LAN terdaftar |
+| BB-04 | **Tambah DVR** | IP DVR + akun, 4 channel | 4 kamera terbentuk dalam satu grup |
+| BB-05 | **Pasang modul** | ZIP modul TA-1 | Modul tampil "valid" + info versi/penulis |
+| BB-06 | **Pasang modul** | ZIP dengan manifest rusak | Ditolak dengan pesan jelas |
+| BB-07 | **Pilih modul per kamera** | Kamera A = TA-1, B = TA-2 | Keduanya berjalan bersamaan dengan overlay masing-masing |
+| BB-08 | Editor zona | Gambar zona + beri peran | Tersimpan & dikirim ke modul |
+| BB-09 | Editor zona | Poligon 2 titik | Ditolak |
+| BB-10 | Live | Cabut kabel kamera 30 s | reconnecting → streaming tanpa restart |
+| BB-11 | **Isolasi** | Modul error di kamera A | Tile A "modul error"; B tetap berjalan |
+| BB-12 | Alert | Metrik melewati ambang selama `for_s` | Notifikasi tray sekali per cooldown |
+| BB-13 | Alert | Kamera offline 60 s | Alert `camera_offline` |
+| BB-14 | Dashboard | Rentang 7 hari | Widget sesuai manifest, tampil < 1 s |
+| BB-15 | Laporan | Ekspor PDF harian | PDF benar, angka sama dengan dashboard |
+| BB-16 | Wizard preset | Preset modul TA-1 | Profil + aturan + dashboard terbentuk |
+| BB-17 | Import/Export | Export lalu import profil | Zona & modul identik |
+| BB-18 | Privasi | Aktifkan blur | Semua orang ter-blur di tampilan & snapshot |
+| BB-19 | **Overload** | Tambah kamera melebihi `N_max` | FPS diturunkan merata; alert `overload`; aplikasi tidak macet |
+| BB-20 | Instalasi | Pasang di PC bersih | Aplikasi berjalan tanpa Python |
+
+### 5.2 Usability — SUS
+
+- Responden ≥ 10 (calon pengguna: pemilik/staf usaha, admin kantor, mahasiswa non-IT).
+- Tugas: (1) tambah DVR & pilih 2 channel, (2) pilih modul + preset dan gambar zona, (3) baca jam tersibuk / metrik utama di dashboard, (4) atur alert, (5) ekspor laporan.
+- Catat tingkat keberhasilan & waktu per tugas, lalu isi 10 butir SUS. Skor = (Σ(ganjil − 1) + Σ(5 − genap)) × 2,5; > 68 = di atas rata-rata.
+
+### 5.3 Uji lapangan terbatas
+
+Pasang aplikasi di **1 lokasi nyata** ≥ 3 hari (dengan izin dan pemberitahuan area terpantau). Sebaiknya lokasi yang sama dengan uji lapangan TA-1 atau TA-2, agar bisa dikerjakan bersama. Fokus TA ini: uptime, reconnect, pemakaian sumber daya, dan tidak ada intervensi manual. Fokus rekan: validitas analitiknya.
 
 ## 6. Analisis
 
-Untuk setiap metrik: tabel hasil → grafik → **analisis penyebab** (contoh: “MAPE dwell 14% di klip ramai disebabkan 3 ID switch saat pelanggan berpapasan di depan kasir; dengan BoT-SORT turun menjadi 8%”). Hubungkan balik ke setiap RM dan ke tujuan Proposal §5.
+Untuk setiap metrik: tabel → grafik → **analisis penyebab**. Contoh: "Pada modul TA-2, `N_max` hanya naik dari 4 ke 6 meskipun inferensi dipercepat 3×, karena 70% waktu per frame ada di ekstraksi fitur Re-ID (`module_ms`). Batas host terlihat dari modul baseline yang mencapai 14 kamera." Hubungkan kembali ke setiap RM.
 
 ## 7. Keluaran (Deliverables)
 
 | Keluaran | Lokasi |
 |---|---|
-| Skrip evaluasi | `scripts/eval_*.py` |
-| Ground truth anotasi | `data/datasets/own_*` (tidak di-commit; deskripsi di laporan) |
-| Tabel & grafik hasil semua metrik | `docs/hasil-evaluasi/` |
+| Skrip uji (paritas, isolasi, kapasitas) | `tests/`, `scripts/` |
+| Tabel & grafik semua metrik | `docs/hasil-evaluasi/` |
 | Data mentah SUS & black-box | `docs/hasil-evaluasi/` |
+| Spesifikasi perangkat & topologi uji | `docs/hasil-evaluasi/` |
 
 ## 8. Definition of Done
 
-- [ ] Semua baris tabel Proposal §10 memiliki angka hasil.
-- [ ] Setiap RM (Proposal §4) punya jawaban berbasis data.
-- [ ] Black-box 15/15 kasus terisi; bug yang ditemukan diperbaiki atau dicatat sebagai batasan.
-- [ ] SUS ≥ 10 responden terkumpul.
+- [ ] Setiap RM punya jawaban berbasis data.
+- [ ] Uji paritas lulus untuk baseline + ≥ 1 modul rekan di backend PyTorch; selisih backend lain terdokumentasi.
+- [ ] `N_max` sebelum/sesudah optimasi untuk ≥ 2 perangkat × ≥ 2 modul.
+- [ ] Black-box 20/20 terisi; bug diperbaiki atau dicatat sebagai batasan.
+- [ ] SUS ≥ 10 responden.
 - [ ] Tag `v1.0.0` → **Milestone M5**.
 
 ## 9. Risiko & Mitigasi
 
 | Risiko | Mitigasi |
 |---|---|
-| Anotasi dwell memakan waktu | Batasi pada klip 5 menit; gunakan pemutar dengan timestamp frame (mis. VLC + ekstensi, atau skrip bantu yang mencatat tombol) |
-| MOT20 terlalu berat | Jalankan di PC GPU, atau subset sekuens |
-| Target < 10% error dwell tidak tercapai | Laporkan jujur + analisis penyebab + perbaikan yang dicoba; itu tetap kontribusi ilmiah |
-| Sulit mendapat izin rekam lokasi | Ajukan surat dari kampus; alternatif: lingkungan kampus (kantin, perpustakaan) |
+| Modul v1 rekan belum final saat pengujian | Uji kapasitas & keandalan dengan baseline + modul versi terakhir; catat versinya; ulangi cepat bila v1 datang (skrip otomatis) |
+| Hasil paritas berbeda karena tracker non-deterministik | Minta rekan menetapkan seed; bandingkan statistik agregat bila per frame tidak mungkin |
+| DVR fisik sulit didapat | Ajukan peminjaman lab; minimal uji pada NVR/DVR milik toko/kantor dengan izin |
+| Waktu uji kapasitas panjang | Otomatisasi penuh (`benchmark_capacity.py` berjalan semalam) |

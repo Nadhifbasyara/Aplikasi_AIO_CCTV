@@ -71,12 +71,23 @@ class PipelineWorker(QThread):
                 # tetap melaporkan state-nya supaya tile bisa menampilkan "reconnecting"
                 now = time.monotonic()
                 if now - t_fps >= 1.0:
+                    stream_stats = getattr(src, "stats", None)
+                    frames_rx = getattr(stream_stats, "frames_received", 0)
+                    frames_cx = getattr(stream_stats, "frames_consumed", 0)
                     self.stats_ready.emit(self.cam_id, {
                         "state": getattr(src, "state", "file"),
+                        "stream_type": "RTSP/TCP" if isinstance(src, RTSPSource) else "File",
+                        "bandwidth_kbps": getattr(stream_stats, "bandwidth_kbps", 0.0),
+                        "total_frames": frames_rx,
+                        "decoded_frames": frames_cx,
+                        "dropped_rate": getattr(stream_stats, "dropped_rate", 0.0),
                         "proc_fps": n / (now - t_fps),
+                        "stream_fps": getattr(stream_stats, "recv_fps", getattr(src, "fps", 0.0)),
+                        "resolution": getattr(src, "resolution", (0, 0)),
                         "detect_ms": pipe.times.detect_ms if pipe else 0.0,
                         "persons": len(res.detections) if f is not None else 0,
-                        "reconnects": getattr(getattr(src, "stats", None), "reconnects", 0),
+                        "reconnects": getattr(stream_stats, "reconnects", 0),
+                        "downtime_s": getattr(stream_stats, "downtime_s", 0.0),
                         "lines": {self._line_names.get(k, k): v
                                   for k, v in res.line_totals.items()} if f is not None else {},
                     })
