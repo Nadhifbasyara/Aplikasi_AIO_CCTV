@@ -36,6 +36,7 @@ from aio_cctv.storage.dashboard_data import (
     AGG_LABELS,
     LiveTail,
     default_widgets,
+    fmt_seconds,
     load_dashboard,
     with_gaps,
 )
@@ -281,6 +282,27 @@ class DashboardPage(QWidget):
                                       brush=PALETTE[1]))
             p.getAxis("bottom").setTicks([[(h, f"{h:02d}") for h in range(0, 24, 2)]])
             return p
+
+        if kind == "event_stats":
+            # ringkasan generik satu field angka event (mis. lama tinggal = dwell_closed.duration_s)
+            box = QGroupBox(f"{title} — {self.cbo_range.currentText().lower()}")
+            lay = QVBoxLayout(box)
+            fv = fmt_seconds if d.get("seconds") else fmt_value
+            regs = d.get("regions", {})
+            if not regs:
+                lay.addWidget(QLabel("Belum ada data pada rentang ini."))
+            for reg, st in sorted(regs.items()):
+                lay.addWidget(QLabel(
+                    f"<b>{names.get(reg, reg) or 'kamera'}</b>: {st['n']} kali · rata-rata "
+                    f"<b>{fv(st['avg'])}</b> · median {fv(st['median'])} · terlama {fv(st['max'])}"))
+            if any(d.get("counts", [])):
+                p = _plot("Sebaran", time_axis=False)
+                p.setMinimumHeight(180)
+                p.addItem(pg.BarGraphItem(x=list(range(len(d["counts"]))), height=d["counts"],
+                                          width=0.8, brush=PALETTE[2]))
+                p.getAxis("bottom").setTicks([list(enumerate(d["bins"]))])
+                lay.addWidget(p)
+            return box
 
         if kind == "events":
             rows = d.get("rows", [])

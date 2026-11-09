@@ -157,6 +157,7 @@ def test_reports_use_manifest_labels(writer, tmp_path):
                                 [CameraInfo("c1", "Kasir", m, {"z1": "Area Kasir"})],
                                 T0 - 60, T0 + 3600)
     assert "Orang" in html and "Area Kasir" in html and "Melintas garis" in html
+    assert "Durasi &amp; nilai event" not in html or "duration_s" in html
     assert "heat_c1.png" in images and images["heat_c1.png"].ndim == 3
     files = export_csv(writer.db_path, tmp_path / "csv", ["c1"], T0 - 60, T0 + 3600)
     with open(next(f for f in files if "event" in f.name)) as fh:
@@ -234,3 +235,23 @@ def test_health_recorder_stores_stream_fps_as_recv_fps(writer):
     h.flush()
     writer.flush()
     assert q.health(writer.db_path, "c1", T0, T0 + 60)[0]["recv_fps"] == 25.0
+
+
+def test_event_field_stats_for_dwell_durations(writer):
+    from aio_cctv.storage.dashboard_data import field_stats, fmt_seconds
+    ag = Aggregator("c1", "m", writer)
+    durs = {"z1": [5, 20, 45, 120, 2000], "z2": [8]}
+    for reg, vals in durs.items():
+        ag.events([Event("dwell_closed", 0.0, reg, i, {"duration_s": v, "start": 0.0})
+                   for i, v in enumerate(vals)], 0.0, T0)
+    ag.events([Event("dwell_closed", 0.0, "z1", 9, {"lain": 1})], 0.0, T0)   # tanpa field: diabaikan
+    writer.flush()
+    vals = q.event_field_values(writer.db_path, "c1", "dwell_closed", "duration_s", T0 - 1, T0 + 1)
+    assert sorted(vals["z1"]) == [5, 20, 45, 120, 2000] and vals["z2"] == [8]
+    st = field_stats(vals, "duration_s")
+    assert st["seconds"] and st["regions"]["z1"]["n"] == 5 and st["regions"]["z1"]["median"] == 45
+    assert st["regions"]["z1"]["max"] == 2000 and st["regions"]["z2"]["avg"] == 8
+    assert st["bins"][0] == "<10 dtk" and st["counts"] == [2, 1, 1, 1, 0, 1]   # 5,8 | 20 | 45 | 120 | – | 2000
+    assert [fmt_seconds(s) for s in (48, 125, 3725)] == ["48 dtk", "2 mnt 05 dtk", "1 jam 02 mnt"]
+    generic = field_stats({"": [1.0, 2.0, 7.0]}, "skor")              # bukan detik: 6 kelas rata
+    assert not generic["seconds"] and len(generic["bins"]) == 6 and sum(generic["counts"]) == 3

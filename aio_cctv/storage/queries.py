@@ -91,6 +91,16 @@ def event_counts(db, cam, start, end) -> dict[str, int]:
             "GROUP BY type ORDER BY type", (cam, start, end))}
 
 
+def event_field_values(db, cam, etype, field, start, end) -> dict[str, list[float]]:
+    """{region_id: [nilai angka Event.data[field]]} — mis. duration_s dari dwell_closed."""
+    out: dict[str, list[float]] = defaultdict(list)
+    for r in _q(db, "SELECT region_id, json_extract(data, ?) AS v FROM events WHERE camera_id=? "
+                    "AND type=? AND ts BETWEEN ? AND ?", (f"$.{field}", cam, etype, start, end)):
+        if isinstance(r["v"], (int, float)):
+            out[r["region_id"] or ""].append(float(r["v"]))
+    return dict(out)
+
+
 def recent_events(db, cam, etype, start, end, limit=200) -> list[dict]:
     rows = _q(db, "SELECT ts, type, region_id, track_id, data FROM events WHERE camera_id=? "
                   "AND (? IS NULL OR type=?) AND ts BETWEEN ? AND ? ORDER BY ts DESC LIMIT ?",

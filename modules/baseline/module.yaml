@@ -45,5 +45,6 @@ events:
 dashboard:
   - {type: kpi,        metric: people_count}
   - {type: timeseries, metric: zone_count, title: "Jumlah orang per zona"}
+  - {type: event_stats, event: dwell_closed, field: duration_s, title: "Lama tinggal di zona"}
   - {type: hourly,     event: line_cross,  title: "Lintasan per jam"}
   - {type: heatmap}

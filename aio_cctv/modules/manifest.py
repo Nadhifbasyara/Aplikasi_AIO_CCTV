@@ -183,6 +183,10 @@ class ModuleManifest(BaseModel):
                     problems.append(f"dashboard: metrik '{w['metric']}' tidak dikenal")
                 if w.get("event") and w["event"] not in self.event_types:
                     problems.append(f"dashboard: event '{w['event']}' tidak dikenal")
+                elif w.get("field") and w["field"] not in next(
+                        (e.fields for e in self.events if e.type == w.get("event")), {}):
+                    problems.append(f"dashboard: field '{w['field']}' tidak ada di event "
+                                    f"'{w.get('event')}'")
             if problems:
                 warnings.append(f"preset {f.name}: " + "; ".join(problems))
             else:

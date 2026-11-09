@@ -24,6 +24,12 @@ const fmt = (v, d = 1) => v === null || v === undefined ? "–"
 const fmtTime = ts => new Date(ts * 1000).toLocaleString("id-ID",
   { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const today = () => new Date().toISOString().slice(0, 10);
+const fmtSeconds = s => {                       // sama dengan dashboard_data.fmt_seconds
+  s = Math.round(s);
+  if (s < 60) return `${s} dtk`;
+  if (s < 3600) return `${Math.floor(s / 60)} mnt ${String(s % 60).padStart(2, "0")} dtk`;
+  return `${Math.floor(s / 3600)} jam ${String(Math.floor(s % 3600 / 60)).padStart(2, "0")} mnt`;
+};
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { credentials: "same-origin", ...opts,
@@ -114,7 +120,8 @@ function lineChart(canvas, series, gap = Infinity) {   // series: [{name, xs, ys
   }
 }
 
-function barChart(canvas, values, color = PALETTE[1]) {   // 24 nilai: jam 00–23
+// labels: null = jam 00–23 (label tiap 2 jam); atau daftar label per batang
+function barChart(canvas, values, color = PALETTE[1], labels = null) {
   const c = setupCanvas(canvas), { ctx, w, h } = c, pad = { l: 36, r: 8, t: 8, b: 20 };
   const ymax = Math.max(1, ...values) * 1.1;
   axes(c, pad, ymax);
@@ -123,9 +130,9 @@ function barChart(canvas, values, color = PALETTE[1]) {   // 24 nilai: jam 00–
     const bh = (h - pad.t - pad.b) * v / ymax;
     ctx.fillStyle = color;
     ctx.fillRect(pad.l + i * bw + 2, h - pad.b - bh, bw - 4, bh);
-    if (i % 2 === 0) {
+    if (labels || i % 2 === 0) {
       ctx.fillStyle = c.muted; ctx.textAlign = "center";
-      ctx.fillText(String(i).padStart(2, "0"), pad.l + i * bw + bw / 2, h - 5);
+      ctx.fillText(labels ? labels[i] : String(i).padStart(2, "0"), pad.l + i * bw + bw / 2, h - 5);
     }
   });
 }
@@ -280,6 +287,19 @@ function renderWidget(w, d, reg, id, days) {
     const cv = el("canvas");
     cv._draw = () => barChart(cv, w.bars || []);
     return el("div", { class: "card" }, el("h3", {}, `${title} (jam 00–23)`), cv);
+  }
+  if (spec.type === "event_stats") {
+    const fv = w.seconds ? fmtSeconds : v => fmt(v);
+    const regs = Object.entries(w.regions || {}).sort();
+    const cv = el("canvas", { style: "height:180px" });
+    cv._draw = () => barChart(cv, w.counts || [], PALETTE[2], w.bins || []);
+    const rangeText = Number(days) === 1 ? "hari ini" : `${days} hari`;
+    return el("div", { class: "card wide" }, el("h3", {}, `${title} — ${rangeText}`),
+      regs.length ? regs.map(([r, st]) => el("div", {}, el("b", {}, reg(r)),
+        `: ${st.n} kali · rata-rata `, el("b", {}, fv(st.avg)),
+        ` · median ${fv(st.median)} · terlama ${fv(st.max)}`))
+        : el("p", { class: "muted" }, "Belum ada data pada rentang ini."),
+      (w.counts || []).some(Boolean) ? [el("div", { class: "muted" }, "Sebaran"), cv] : null);
   }
   if (spec.type === "events") {
     const rows = w.rows || [];

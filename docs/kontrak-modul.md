@@ -119,7 +119,7 @@ Preset adalah "template tempat" yang dipakai **wizard** di aplikasi (halaman Kam
 | `slots[].multiple` / `optional` | Boleh digambar lebih dari satu / boleh dilewati |
 | `params` | Kunci harus ada di `params` manifest |
 | `rules` | Format aturan alert aplikasi. Jenisnya: `metric_gt`, `metric_lt`, `event`, `camera_offline`, `module_error`, `overload`. `metric`/`event` harus terdaftar di manifest; `region_role` menyaring zona berdasarkan peran |
-| `dashboard` | Jenis widget: `kpi`, `timeseries`, `hourly`, `events`, `heatmap`, merujuk `metric`/`event` manifest |
+| `dashboard` | Jenis widget: `kpi`, `timeseries`, `hourly`, `events`, `heatmap`, dan `event_stats` (ringkasan satu field angka event: jumlah, rata-rata, median, maks, sebaran; mis. `{"type": "event_stats", "event": "dwell_closed", "field": "duration_s"}`). Merujuk `metric`/`event`/`field` manifest. Field berakhiran `_s` ditampilkan sebagai durasi (detik) |
 
 Preset yang salah **tidak** membuat modul tidak valid. Preset itu hanya disembunyikan dari wizard, dan peringatannya tampil di halaman Modul. Contoh lengkap: [`modules/baseline/presets/toko-kecil.json`](../modules/baseline/presets/toko-kecil.json).
 

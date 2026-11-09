@@ -19,22 +19,6 @@ from aio_cctv.gui.widgets.video_tile import VideoTile
 GRIDS = {"1x1": 1, "2x2": 2, "3x3": 3}
 
 
-class AddCameraTile(QWidget):
-    """Kotak '+ Tambah kamera' di slot kosong terakhir (mockup §4)."""
-
-    clicked = pyqtSignal()
-
-    def __init__(self):
-        super().__init__()
-        btn = QPushButton("＋  Tambah kamera")
-        btn.setMinimumHeight(180)
-        btn.setStyleSheet("border:2px dashed #888; color:#888; font-size:14px;")
-        btn.clicked.connect(self.clicked)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(2, 2, 2, 2)
-        lay.addWidget(btn)
-
-
 class LiveViewPage(QWidget):
     status_changed = pyqtSignal(str)               # baris status bawah
     online_changed = pyqtSignal(int)               # "● N kamera online"
@@ -64,10 +48,16 @@ class LiveViewPage(QWidget):
         self.btn_stop_all = QPushButton("Hentikan semua")
         self.btn_start_all.clicked.connect(self.start_all)
         self.btn_stop_all.clicked.connect(self.manager.stop_all)
+        # tombol kecil menggantikan kotak "+ Tambah kamera" di grid (lebih rapi)
+        self.btn_add = QPushButton("＋")
+        self.btn_add.setToolTip("Tambah kamera")
+        self.btn_add.setFixedWidth(self.btn_add.sizeHint().height() + 8)
+        self.btn_add.clicked.connect(self.add_camera_requested)
 
         bar = QHBoxLayout()
         bar.addWidget(self.btn_start_all)
         bar.addWidget(self.btn_stop_all)
+        bar.addWidget(self.btn_add)
         bar.addStretch()
         bar.addWidget(QLabel("Grid:"))
         bar.addWidget(self.cbo_grid)
@@ -79,7 +69,7 @@ class LiveViewPage(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.grid_host)
 
-        self.empty_hint = QLabel("Belum ada kamera. Tambahkan lewat halaman Kamera.")
+        self.empty_hint = QLabel("Belum ada kamera. Klik ＋ di atas untuk menambahkan.")
         self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_hint.setStyleSheet("color:#888;")
 
@@ -115,9 +105,6 @@ class LiveViewPage(QWidget):
                 tile.set_error(msg)
             self.grid.addWidget(tile, i // self.cols, i % self.cols)
 
-        placeholder = AddCameraTile()
-        placeholder.clicked.connect(self.add_camera_requested)
-        self.grid.addWidget(placeholder, len(cams) // self.cols, len(cams) % self.cols)
         self.empty_hint.setVisible(not cams)
         self._emit_status()
 

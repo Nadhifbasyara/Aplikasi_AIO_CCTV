@@ -11,6 +11,7 @@ import numpy as np
 from aio_cctv.annotate import fmt_value, render_heat
 from aio_cctv.modules.manifest import ModuleManifest
 from aio_cctv.storage import queries as q
+from aio_cctv.storage.dashboard_data import field_stats, fmt_seconds
 
 
 @dataclass
@@ -82,6 +83,22 @@ def build_report(db, cameras: list[CameraInfo], start: float, end: float,
                 hour_rows += [[labels.get(t, t), f"{h:02d}:00", n]
                               for h, n in enumerate(per_hour) if n]
             parts.append("<h3>Event per jam</h3>" + _table(["Event", "Jam", "Jumlah"], hour_rows))
+
+        # field angka event yang dideklarasikan manifest (mis. lama tinggal = duration_s)
+        stat_rows = []
+        for e in m.events:
+            for field, kind in e.fields.items():
+                if kind not in ("float", "int"):
+                    continue
+                st = field_stats(q.event_field_values(db, cam.id, e.type, field, start, end), field)
+                fv = fmt_seconds if st["seconds"] else fmt_value
+                stat_rows += [[f"{labels.get(e.type, e.type)} · {field}",
+                               cam.region_names.get(reg, reg) or "(kamera)", s["n"], fv(s["avg"]),
+                               fv(s["median"]), fv(s["max"])]
+                              for reg, s in sorted(st["regions"].items())]
+        if stat_rows:
+            parts.append("<h3>Durasi & nilai event</h3>" + _table(
+                ["Event · field", "Zona", "Jumlah", "Rata-rata", "Median", "Maks"], stat_rows))
 
         if (heat := q.heat_sum(db, cam.id, m.id, start, end)) is not None:
             name = f"heat_{cam.id}.png"

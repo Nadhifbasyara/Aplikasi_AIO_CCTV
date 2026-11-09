@@ -109,6 +109,8 @@ def test_dashboard_numbers_equal_desktop_loader(client, state):
     hourly = next(w for w in d["widgets"] if w["spec"]["type"] == "hourly")
     assert sum(hourly["bars"]) == 30
     assert next(w for w in d["widgets"] if w["spec"]["type"] == "heatmap")["has_heat"]
+    es = next(w for w in d["widgets"] if w["spec"]["type"] == "event_stats")   # lama tinggal
+    assert es["spec"]["field"] == "duration_s" and es["seconds"] and es["regions"] == {}
     assert client.get("/api/cameras/cam1/heatmap.png").content[:4] == b"\x89PNG"
     assert client.get("/api/cameras/cam2/dashboard").status_code == 409
 
