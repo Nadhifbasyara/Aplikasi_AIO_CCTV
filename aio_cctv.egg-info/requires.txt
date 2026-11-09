@@ -5,10 +5,13 @@ numpy
 pydantic>=2.7
 yt-dlp
 lap>=0.5.12
+pyyaml
+packaging
 
 [dev]
 pytest
 ruff
+httpx
 
 [eval]
 motmetrics
@@ -22,8 +25,14 @@ keyring
 keyrings.alt
 platformdirs
 shapely>=2.0
+psutil
+nvidia-ml-py
 
 [rtsp]
 av>=12
 onvif-zeep
 WSDiscovery
+
+[web]
+fastapi>=0.110
+uvicorn>=0.29

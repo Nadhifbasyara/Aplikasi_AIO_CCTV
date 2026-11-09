@@ -1,11 +1,16 @@
-"""Model konfigurasi zona/garis (evolusi JSON Proposal §8.4, skema v1)."""
+"""Model konfigurasi kamera: zona/garis + modul + aturan (Proposal §8.4; skema v2, Fase 8)."""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from aio_cctv.alerts.rules import Rule
+
+SCHEMA_VERSION = 2
+DEFAULT_MODULE = "baseline"
 
 Point = tuple[float, float]          # (x, y) ternormalisasi 0..1
 
@@ -53,16 +58,42 @@ class SourceConfig(BaseModel):
     uri: str
 
 
+class ModuleBinding(BaseModel):
+    """Modul analitik kamera ini (Fase 8; sebelumnya di CameraConfig)."""
+    module_id: str = DEFAULT_MODULE
+    module_version: str = ""                      # versi saat profil dibuat/diubah (info)
+    preset_id: str | None = None                  # preset wizard yang dipakai, bila ada
+    params: dict[str, Any] = Field(default_factory=dict)   # hanya yang berbeda dari default
+
+
 class Profile(BaseModel):
-    schema_version: int = 1
+    """Satu profil per kamera. v1 (Fase 1–7) dimigrasi otomatis saat dibaca."""
+    schema_version: int = SCHEMA_VERSION
     profile_id: str
-    vertical: str = "generic"                     # fnb, retail, clinic, ... (Proposal §1)
-    source: SourceConfig
+    name: str = ""
+    vertical: str = "generic"                     # warisan v1, tidak dipakai host
+    source: SourceConfig | None = None            # info saja; tidak ikut ekspor .aioprofile
     frame_size: tuple[int, int] | None = None     # resolusi saat zona digambar (info saja)
-    target_classes: list[str] = Field(default_factory=lambda: ["person"])  # Fase 6: diabaikan,
-                                                  # kelas ditentukan manifest modul
+    target_classes: list[str] = Field(default_factory=list)   # warisan v1; kelas dari manifest
+    module: ModuleBinding = Field(default_factory=ModuleBinding)
     zones: list[Zone] = Field(default_factory=list)
     lines: list[Line] = Field(default_factory=list)
+    rules: list[Rule] = Field(default_factory=list)         # kosong = aturan bawaan host
+    dashboard: list[dict[str, Any]] = Field(default_factory=list)  # kosong = manifest.dashboard
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate(cls, data: Any) -> Any:
+        """v1 -> v2: zona/garis tetap; modul diisi baseline (CameraManager memindahkan pilihan
+        modul & aturan lama dari cameras.json, lihat camera_manager.migrate_camera)."""
+        if isinstance(data, dict) and data.get("schema_version", 1) < SCHEMA_VERSION:
+            data = {**data, "schema_version": SCHEMA_VERSION}
+            data.setdefault("module", {"module_id": DEFAULT_MODULE})
+        return data
+
+    @property
+    def region_names(self) -> dict[str, str]:
+        return {z.id: z.name for z in self.zones} | {ln.id: ln.name for ln in self.lines}
 
     @classmethod
     def load(cls, path: str | Path) -> Profile:

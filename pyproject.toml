@@ -1,6 +1,6 @@
 [project]
 name = "aio-cctv"
-version = "0.0.1"
+version = "0.8.0"
 requires-python = ">=3.10,<3.13"
 dependencies = [
   "ultralytics>=8.3",        
@@ -18,9 +18,10 @@ dependencies = [
 gui   = ["PyQt6>=6.7", "pyqtgraph>=0.13", "keyring", "keyrings.alt", "platformdirs",
          "shapely>=2.0",   # shapely: validasi poligon editor zona (Fase 5 §5.6)
          "psutil", "nvidia-ml-py"]   # pemakaian CPU/RAM/GPU -> system_minute (Fase 7)
+web   = ["fastapi>=0.110", "uvicorn>=0.29"]   # dashboard web lokal (Fase 8 §8)
 rtsp  = ["av>=12", "onvif-zeep", "WSDiscovery"]                        
 eval  = ["motmetrics", "pandas", "matplotlib"]                         
-dev   = ["pytest", "ruff"]
+dev   = ["pytest", "ruff", "httpx"]           # httpx: TestClient FastAPI
 
 [tool.ruff]
 line-length = 100

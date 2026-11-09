@@ -93,6 +93,31 @@ class SettingsPage(QWidget):
         f4.addRow("Simpan data analitik", self.spin_retention)
         f4.addRow("", self.chk_tray)
 
+        self.chk_web = QCheckBox("Aktifkan dashboard web lokal")
+        self.spin_port = QSpinBox()
+        self.spin_port.setRange(1024, 65535)
+        self.chk_lan = QCheckBox("Izinkan akses dari HP/PC lain di jaringan lokal (wajib login)")
+        self.chk_lan.setToolTip("Mati = hanya bisa dibuka dari PC ini (127.0.0.1). Jangan "
+                                "port-forward ke internet.")
+        self.btn_web_pw = QPushButton("Atur kata sandi web…")
+        self.btn_web_pw.clicked.connect(self._set_web_password)
+        self.btn_web_open = QPushButton("Buka di browser")
+        self.btn_web_open.clicked.connect(self._open_web)
+        self.lbl_web = QLabel()
+        self.lbl_web.setWordWrap(True)
+        self.lbl_web.setStyleSheet("color:#888;")
+        web = QGroupBox("Dashboard web (localhost)")
+        f5 = QFormLayout(web)
+        f5.addRow("", self.chk_web)
+        f5.addRow("Port", self.spin_port)
+        f5.addRow("", self.chk_lan)
+        web_btns = QHBoxLayout()
+        web_btns.addWidget(self.btn_web_pw)
+        web_btns.addWidget(self.btn_web_open)
+        web_btns.addStretch()
+        f5.addRow("", web_btns)
+        f5.addRow("", self.lbl_web)
+
         self.cbo_lang = QComboBox()
         self.cbo_lang.addItem("Indonesia", "id")
         self.cbo_lang.setEnabled(False)
@@ -117,6 +142,7 @@ class SettingsPage(QWidget):
         lay.addWidget(analitik)
         lay.addWidget(tampilan)
         lay.addWidget(privasi)
+        lay.addWidget(web)
         lay.addWidget(umum)
         lay.addLayout(bar)
         lay.addWidget(self.lbl_status)
@@ -133,6 +159,10 @@ class SettingsPage(QWidget):
         self.chk_blur.setChecked(s["blur"])
         self.spin_retention.setValue(s["retention_days"])
         self.chk_tray.setChecked(s["tray_notify"])
+        self.chk_web.setChecked(s["web_enabled"])
+        self.spin_port.setValue(s["web_port"])
+        self.chk_lan.setChecked(s["web_lan"])
+        self._show_web_status()
         self.cbo_lang.setCurrentIndex(max(0, self.cbo_lang.findData(s["language"])))
 
     def values(self) -> dict:
@@ -145,10 +175,65 @@ class SettingsPage(QWidget):
             "blur": self.chk_blur.isChecked(),
             "retention_days": self.spin_retention.value(),
             "tray_notify": self.chk_tray.isChecked(),
+            "web_enabled": self.chk_web.isChecked(),
+            "web_port": self.spin_port.value(),
+            "web_lan": self.chk_lan.isChecked(),
             "language": self.cbo_lang.currentData(),
         }
 
+    # ------------------------------------------------------------ dashboard web
+    def _show_web_status(self) -> None:
+        from aio_cctv.web.server import lan_addresses
+
+        web = getattr(self.camera_manager, "web", None)
+        if web is None:
+            err = getattr(self.camera_manager, "web_error", "")
+            self.lbl_web.setText(f"Tidak berjalan{': ' + err if err else ''}.")
+            return
+        lan = ", ".join(f"http://{ip}:{web.port}" for ip in lan_addresses()) if web.allow_lan \
+            else "mati (hanya PC ini)"
+        self.lbl_web.setText(f"Berjalan di {web.url} · akses LAN: {lan}")
+
+    def _open_web(self) -> None:
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl(f"http://localhost:{self.spin_port.value()}"))
+
+    def _set_web_password(self) -> bool:
+        from PyQt6.QtWidgets import QInputDialog, QLineEdit
+
+        from aio_cctv.web.auth import set_web_password
+
+        pw, ok = QInputDialog.getText(self, "Kata sandi dashboard web",
+                                      "Kata sandi baru (min. 8 karakter):", QLineEdit.EchoMode.Password)
+        if not ok:
+            return False
+        if len(pw) < 8:
+            QMessageBox.warning(self, "Kata sandi", "Minimal 8 karakter.")
+            return False
+        again, ok = QInputDialog.getText(self, "Kata sandi dashboard web", "Ulangi kata sandi:",
+                                         QLineEdit.EchoMode.Password)
+        if not ok or again != pw:
+            QMessageBox.warning(self, "Kata sandi", "Kata sandi tidak sama.")
+            return False
+        try:
+            set_web_password(pw)                   # hanya hash yang disimpan, di OS keyring
+        except Exception as e:
+            QMessageBox.warning(self, "Kata sandi", f"Gagal menyimpan ke keyring: {e}")
+            return False
+        QMessageBox.information(self, "Kata sandi", "Kata sandi tersimpan. Berlaku setelah "
+                                "pengaturan disimpan.")
+        return True
+
     def save(self) -> None:
+        from aio_cctv.web.auth import web_password_hash
+
+        if self.chk_lan.isChecked() and self.chk_web.isChecked() and not web_password_hash():
+            QMessageBox.information(self, "Akses LAN", "Akses dari jaringan lokal butuh kata "
+                                    "sandi. Atur kata sandi dulu.")
+            if not self._set_web_password():
+                return
         s = qsettings()
         for key, value in self.values().items():
             s.setValue(key, value)
@@ -163,6 +248,7 @@ class SettingsPage(QWidget):
             note = f" {len(running)} kamera dijalankan ulang agar pengaturan baru dipakai."
         self.lbl_status.setStyleSheet("color:#2E7D32;")
         self.lbl_status.setText(f"Pengaturan tersimpan.{note}")
+        self._show_web_status()
 
     def reset(self) -> None:
         if QMessageBox.question(

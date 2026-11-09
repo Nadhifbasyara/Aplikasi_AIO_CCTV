@@ -26,6 +26,7 @@ class ModuleInfo:
     path: Path
     manifest: ModuleManifest | None = None
     errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)   # mis. preset rusak (modul tetap valid)
 
     @property
     def id(self) -> str:
@@ -54,6 +55,7 @@ def inspect(module_dir: str | Path) -> ModuleInfo:
         return info
     info.errors += info.manifest.check_files()
     info.errors += info.manifest.check_requirements()
+    info.warnings += info.manifest.load_presets()[1]
     return info
 
 

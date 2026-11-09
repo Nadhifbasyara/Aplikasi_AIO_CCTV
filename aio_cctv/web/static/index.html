@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIO-CCTV Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="#/">AIO-CCTV</a>
+    <nav>
+      <a href="#/" data-nav="home">Ringkasan</a>
+      <a href="#/alerts" data-nav="alerts">Alert <span id="badge" class="badge" hidden></span></a>
+      <a href="#/reports" data-nav="reports">Laporan</a>
+    </nav>
+    <span id="clock" class="muted"></span>
+    <button id="logout" class="link" hidden>Keluar</button>
+  </header>
+
+  <main id="view"><p class="muted">Memuat…</p></main>
+
+  <div id="login" class="overlay" hidden>
+    <form id="login-form" class="card">
+      <h2>Masuk</h2>
+      <p class="muted">Dashboard ini dapat diakses dari jaringan lokal, sehingga perlu kata sandi
+        (diatur di aplikasi desktop: Pengaturan → Dashboard web).</p>
+      <input id="password" type="password" placeholder="Kata sandi" autocomplete="current-password" required>
+      <button type="submit">Masuk</button>
+      <p id="login-error" class="error"></p>
+    </form>
+  </div>
+
+  <footer class="muted">Analitik diproses di PC ini; video tidak dikirim ke internet.
+    <span id="version"></span></footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -102,7 +102,7 @@ class ModulesPage(QWidget):
         self.table.setRowCount(len(mods))
         for r, info in enumerate(mods):
             m = info.manifest
-            used = sum(c.module_id == info.id for c in self.manager.cameras.values())
+            used = sum(self.manager.module_id(c) == info.id for c in self.manager.cameras.values())
             values = [
                 m.name if m else info.path.name,
                 info.id,

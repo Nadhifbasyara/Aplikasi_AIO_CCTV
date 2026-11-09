@@ -1,13 +1,14 @@
 """Skema `module.yaml` (Fase 6 §4.2) + pemeriksaan yang tidak butuh memuat kode modul."""
 from __future__ import annotations
 
+import json
 from importlib import metadata
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
 from packaging.requirements import InvalidRequirement, Requirement
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from aio_cctv.modules.api import API_VERSION
 
@@ -62,6 +63,27 @@ class EventSpec(BaseModel):
     type: str
     label: str = ""
     fields: dict[str, str] = Field(default_factory=dict)
+
+
+class PresetSlot(BaseModel):
+    """Satu area yang digambar pengguna di wizard (Fase 8 §4)."""
+    key: str
+    kind: Literal["zone", "line"] = "zone"
+    role: str | None = None                 # harus ada di manifest.regions dengan kind sama
+    label: str = ""
+    hint: str = ""
+    optional: bool = False
+    multiple: bool = False
+
+
+class Preset(BaseModel):
+    preset_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
+    label: str
+    description: str = ""
+    slots: list[PresetSlot] = Field(default_factory=list)
+    params: dict[str, Any] = Field(default_factory=dict)
+    rules: list[dict[str, Any]] = Field(default_factory=list)      # format Rule (Fase 7)
+    dashboard: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ModuleManifest(BaseModel):
@@ -125,6 +147,47 @@ class ModuleManifest(BaseModel):
             raw = values.get(key, spec.default)
             out[key] = None if raw is None else spec.coerce(raw)
         return out
+
+    def load_presets(self) -> tuple[list[Preset], list[str]]:
+        """Preset valid + daftar peringatan. Preset rusak tidak membuat modul tidak valid."""
+        from aio_cctv.alerts.rules import Rule
+
+        presets, warnings = [], []
+        roles = {(r.role, r.kind) for r in self.regions}
+        for f in sorted((self.dir / "presets").glob("*.json")):
+            try:
+                p = Preset.model_validate(json.loads(f.read_text(encoding="utf-8")))
+            except (ValueError, ValidationError) as e:
+                warnings.append(f"preset {f.name}: tidak valid ({str(e).splitlines()[0]})")
+                continue
+            problems = []
+            keys = [s.key for s in p.slots]
+            if dup := {k for k in keys if keys.count(k) > 1}:
+                problems.append(f"slot duplikat {sorted(dup)}")
+            problems += [f"peran '{s.role}' ({s.kind}) tidak ada di manifest.regions"
+                         for s in p.slots if s.role and (s.role, s.kind) not in roles]
+            problems += [f"parameter '{k}' tidak ada di manifest.params"
+                         for k in p.params if k not in self.params]
+            for r in p.rules:
+                try:
+                    rule = Rule.model_validate(r)
+                except ValidationError as e:
+                    problems.append(f"aturan {r.get('id', '?')}: {e.errors()[0]['msg']}")
+                    continue
+                if rule.metric and rule.metric not in self.metric_keys:
+                    problems.append(f"aturan {rule.id}: metrik '{rule.metric}' tidak dikenal")
+                if rule.event and rule.event not in self.event_types:
+                    problems.append(f"aturan {rule.id}: event '{rule.event}' tidak dikenal")
+            for w in p.dashboard:
+                if w.get("metric") and w["metric"] not in self.metric_keys:
+                    problems.append(f"dashboard: metrik '{w['metric']}' tidak dikenal")
+                if w.get("event") and w["event"] not in self.event_types:
+                    problems.append(f"dashboard: event '{w['event']}' tidak dikenal")
+            if problems:
+                warnings.append(f"preset {f.name}: " + "; ".join(problems))
+            else:
+                presets.append(p)
+        return presets, warnings
 
     def check_files(self) -> list[str]:
         errors = []

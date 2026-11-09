@@ -61,6 +61,7 @@ class Aggregator:
         minute = int(wall_ts // 60 * 60)
         if self._minute is not None and minute != self._minute:
             self._flush_minute()
+            self._flush_heat()     # jam berjalan ikut tersimpan (REPLACE) agar heatmap tampil live
         self._minute = minute
         for m in res.metrics:
             self._samples[(m.key, m.region_id or "")].append(float(m.value))
@@ -130,7 +131,13 @@ class HealthRecorder:
         if not self._rows:
             return
         rows = self._rows
-        avg = {f: float(np.mean([r.get(f, 0.0) or 0.0 for r in rows])) for f in self.FIELDS}
+
+        def get(r: dict, f: str) -> float:
+            # worker menamai FPS yang diterima dari kamera "stream_fps"; kolom DB-nya recv_fps
+            v = r.get(f, r.get("stream_fps") if f == "recv_fps" else None)
+            return float(v or 0.0)
+
+        avg = {f: float(np.mean([get(r, f) for r in rows])) for f in self.FIELDS}
         self.writer.put(INS_HEALTH, (self.cam, self._minute, rows[-1].get("state", "?"),
                                      avg["recv_fps"], avg["proc_fps"], avg["dropped_rate"],
                                      avg["detect_ms"], avg["module_ms"], avg["latency_ms"],

@@ -96,6 +96,22 @@ class MainWindow(QMainWindow):
         self.camera_manager.alert_raised.connect(self._on_alert)
         self.page_alerts.unread_changed.connect(self._set_unread)
 
+        # 5. Dashboard web lokal (Fase 8)
+        self.lbl_web = QLabel()
+        self.statusBar().addPermanentWidget(self.lbl_web)
+        self.page_settings.settings_saved.connect(self._restart_web)
+        self._restart_web()
+
+    def _restart_web(self) -> None:
+        mgr = self.camera_manager
+        mgr.start_web()
+        if mgr.web is not None:
+            self.lbl_web.setText(f"Web: <a href='{mgr.web.url}'>{mgr.web.url}</a>")
+            self.lbl_web.setOpenExternalLinks(True)
+        else:
+            self.lbl_web.setText(f"Web: {mgr.web_error or 'nonaktif'}")
+        self.page_settings._show_web_status()
+
     def _on_alert(self, cam_id: str, alert: dict) -> None:
         cam = self.camera_manager.cameras.get(cam_id)
         text = f"[{cam.name if cam else cam_id}] {alert['message']}"

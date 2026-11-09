@@ -43,7 +43,8 @@ class Rule(BaseModel):
         where = f" @{self.region_role}" if self.region_role else ""
         thr = f" {'>' if self.type == 'metric_gt' else '<'} {self.threshold:g}" \
             if self.threshold is not None and self.type in ("metric_gt", "metric_lt", "overload") else ""
-        return f"{TYPE_LABELS[self.type]}: {what}{where}{thr}".strip()
+        detail = f"{what}{where}{thr}".strip()
+        return f"{TYPE_LABELS[self.type]}: {detail}" if detail else TYPE_LABELS[self.type]
 
 
 def default_rules() -> list[Rule]:

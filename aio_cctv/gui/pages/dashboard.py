@@ -5,6 +5,7 @@ Data dibaca di thread pool (koneksi SQLite read-only) agar GUI tidak membeku.
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime
 
 import cv2
@@ -28,52 +29,20 @@ from PyQt6.QtWidgets import (
 
 from aio_cctv.annotate import fmt_value, render_heat
 from aio_cctv.core.colors import PALETTE
-from aio_cctv.core.paths import PROFILES_DIR
 from aio_cctv.gui.utils import to_qimage
 from aio_cctv.gui.workers.net_tasks import run_async
 from aio_cctv.storage import queries as q
-from aio_cctv.zones.models import Profile, to_pixels
+from aio_cctv.storage.dashboard_data import (
+    AGG_LABELS,
+    LiveTail,
+    default_widgets,
+    load_dashboard,
+    with_gaps,
+)
+from aio_cctv.zones.models import to_pixels
 
 RANGES = [("Hari ini", 1), ("7 hari", 7), ("30 hari", 30)]
-REFRESH_MS = 30_000
-
-
-def default_widgets(manifest) -> list[dict]:
-    """Bila modul tidak mengisi `dashboard`: KPI metrik kamera, grafik metrik per zona,
-    jam sibuk per event."""
-    out = [{"type": "kpi", "metric": m.key} for m in manifest.metrics if not m.per_region][:3]
-    out += [{"type": "timeseries", "metric": m.key} for m in manifest.metrics if m.per_region][:2]
-    out += [{"type": "hourly", "event": e.type} for e in manifest.events][:2]
-    return out
-
-
-def load_dashboard(db, cam_id: str, manifest, widgets: list[dict], start: float,
-                   end: float) -> list[dict]:
-    """Dijalankan di thread pool. Mengembalikan data siap gambar untuk tiap widget."""
-    bucket = 60 if end - start <= 86400 + 1 else 3600
-    out = []
-    for w in widgets:
-        kind, d = w.get("type"), {"spec": w}
-        spec = manifest.metric(w["metric"]) if w.get("metric") else None
-        agg = spec.agg if spec else "avg"
-        if kind == "kpi" and spec:
-            d["values"] = q.metric_summary(db, cam_id, manifest.id, spec.key, start, end, agg)
-        elif kind == "timeseries" and spec:
-            d["series"] = q.metric_series(db, cam_id, manifest.id, spec.key, start, end, agg, bucket)
-        elif kind == "hourly":
-            d["bars"] = (q.events_by_hour_of_day(db, cam_id, w["event"], start, end)
-                         if w.get("event") else
-                         q.metric_by_hour_of_day(db, cam_id, manifest.id, spec.key, start, end, agg)
-                         if spec else [0] * 24)
-        elif kind == "events":
-            d["rows"] = q.recent_events(db, cam_id, w.get("event"), start, end, limit=200)
-        elif kind == "heatmap":
-            d["heat"] = q.heat_sum(db, cam_id, manifest.id, start, end)
-        out.append(d)
-    on, total = q.uptime(db, cam_id, start, end)
-    out.append({"spec": {"type": "health"}, "health": q.health(db, cam_id, start, end),
-                "uptime": (on, total), "counts": q.event_counts(db, cam_id, start, end)})
-    return out
+REFRESH_MS = 15_000          # muat ulang penuh; KPI & ujung grafik bergerak tiap detik
 
 
 def _plot(title: str, time_axis: bool = True) -> pg.PlotWidget:
@@ -92,9 +61,13 @@ class DashboardPage(QWidget):
         self.manager = manager
         self._loading = False
         self._pending = False                      # pilihan berubah saat data masih dimuat
+        self._kpi_labels: dict[tuple[str, str], tuple] = {}   # (metric, region) -> label live
+        self._live_curves: dict[str, dict] = {}    # metric -> kurva grafik waktu + menit berjalan
+        self._tails: dict[tuple[str, str], LiveTail] = {}       # (kamera, metric) -> tetap antar-reload
         self._setup_ui()
         manager.cameras_changed.connect(self._reload_cameras)
         manager.modules_changed.connect(self.refresh)
+        manager.stats_updated.connect(self._on_stats)
         self._reload_cameras()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
@@ -153,13 +126,9 @@ class DashboardPage(QWidget):
         cam = self.manager.cameras.get(self.cbo_cam.currentData())
         if cam is None:
             return None
-        info = self.manager.module_for(cam)
+        profile = self.manager.profile(cam)
+        info = self.manager.modules.get(profile.module.module_id)
         manifest = info.manifest if info is not None else None
-        path = PROFILES_DIR / f"{cam.profile_id or cam.id}.json"
-        try:
-            profile = Profile.load(path) if path.exists() else None
-        except Exception:                          # profil rusak tidak boleh menjatuhkan dashboard
-            profile = None
         return cam, manifest, profile
 
     # ------------------------------------------------------------------ data
@@ -177,14 +146,16 @@ class DashboardPage(QWidget):
         cam, manifest, _ = ctx
         if manifest is None:
             self._clear()
-            self.lbl_info.setText(f"Modul “{cam.module_id}” kamera ini tidak terpasang/valid — "
+            self.lbl_info.setText(f"Modul “{self.manager.module_id(cam)}” kamera ini tidak terpasang/valid — "
                                   "dashboard butuh manifest untuk label metrik.")
             return
-        widgets = manifest.dashboard or default_widgets(manifest)
+        widgets = ctx[2].dashboard or manifest.dashboard or default_widgets(manifest)
         start, end = q.day_range(self.cbo_range.currentData() or 1)
         self._loading = True
         self.lbl_info.setText("Memuat…")
-        run_async(load_dashboard, self.manager.db_path, cam.id, manifest, widgets, start, end,
+        live = self.manager._last_stats.get(cam.id, {}).get("live_metrics") \
+            if self.manager.is_running(cam.id) else None
+        run_async(load_dashboard, self.manager.db_path, cam.id, manifest, widgets, start, end, live,
                   on_done=lambda data: self._render(data, ctx, start, end),
                   on_failed=self._failed)
 
@@ -201,7 +172,29 @@ class DashboardPage(QWidget):
         if not self._finish_loading():
             self.lbl_info.setText(f"Gagal memuat data: {msg}")
 
+    def _on_stats(self, cam_id: str, s: dict) -> None:
+        """KPI "sekarang" ikut bergerak tiap detik; grafik tetap dimuat ulang tiap 30 detik."""
+        if cam_id != self.cbo_cam.currentData() or not self.isVisible():
+            return
+        now = time.time()
+        for key, region, value in s.get("live_metrics", []):
+            if (lbl := self._kpi_labels.get((key, region or ""))) is not None:
+                big, unit = lbl
+                big.setText(f"{fmt_value(value)}{unit}")
+            if key in self._live_curves:
+                self._live_curves[key]["tail"].add(region or "", value, now)
+        for key in self._live_curves:
+            self._redraw_tail(key)
+
+    def _redraw_tail(self, key: str) -> None:
+        live = self._live_curves[key]
+        for reg, (curve, gx, gy, last_x) in live["curves"].items():
+            tx, ty = live["tail"].points(reg, after=last_x)
+            curve.setData(gx + tx, gy + ty, connect="finite")
+
     def _clear(self) -> None:
+        self._kpi_labels = {}
+        self._live_curves = {}
         while self.grid.count():
             self.grid.takeAt(0).widget().deleteLater()
 
@@ -239,23 +232,46 @@ class DashboardPage(QWidget):
         if kind == "kpi" and spec:
             box = QGroupBox(title)
             lay = QVBoxLayout(box)
-            vals = d.get("values", {})
-            if not vals:
+            vals, now, latest, mx = (d.get(k, {}) for k in ("values", "now", "latest", "max"))
+            regions = sorted(set(vals) | set(now))
+            if not regions:
                 lay.addWidget(QLabel("—"))
-            for reg, v in sorted(vals.items()):
-                lbl = QLabel(f"{fmt_value(v)}{unit}")
+            for reg in regions:
+                # angka besar = keadaan SEKARANG (live) / terakhir tercatat; rata-rata di bawahnya
+                if reg in now:
+                    big, when = now[reg], "sekarang"
+                elif reg in latest:
+                    ts, big = latest[reg]
+                    when = f"terakhir, pukul {datetime.fromtimestamp(ts):%H:%M}"
+                else:
+                    big, when = vals[reg], AGG_LABELS.get(spec.agg, spec.agg)
+                lbl = QLabel(f"{fmt_value(big)}{unit}")
                 lbl.setStyleSheet("font-size:26px; font-weight:bold;")
                 lay.addWidget(lbl)
-                if reg:
-                    lay.addWidget(QLabel(names.get(reg, reg)))
-            lay.addWidget(QLabel(f"<span style='color:#888'>agregasi: {spec.agg}</span>"))
+                self._kpi_labels[(spec.key, reg)] = (lbl, unit)
+                where = f"{names.get(reg, reg)} · " if reg else ""
+                summary = f"{AGG_LABELS.get(spec.agg, spec.agg)} {fmt_value(vals[reg])}{unit}" \
+                    if reg in vals else "belum ada data tersimpan"
+                if reg in mx:
+                    summary += f" · maks {fmt_value(mx[reg])}{unit}"
+                lay.addWidget(QLabel(f"<span style='color:#888'>{where}{when} · "
+                                     f"{self.cbo_range.currentText().lower()}: {summary}</span>"))
             return box
 
         if kind == "timeseries" and spec:
             p = _plot(f"{title}{' (' + spec.unit + ')' if spec.unit else ''}")
+            bucket = d.get("bucket_s", 60)
+            curves = {}
             for i, (reg, (xs, ys)) in enumerate(sorted(d.get("series", {}).items())):
-                p.plot(xs, ys, pen=pg.mkPen(PALETTE[i % len(PALETTE)], width=2),
-                       name=names.get(reg, reg) or "kamera")
+                gx, gy = with_gaps(xs, ys, bucket)              # celah data = garis terputus
+                curve = p.plot(gx, gy, pen=pg.mkPen(PALETTE[i % len(PALETTE)], width=2),
+                               connect="finite", name=names.get(reg, reg) or "kamera")
+                curves[reg] = (curve, gx, gy, xs[-1] if xs else float("-inf"))
+            if bucket == 60:                                    # ujung live hanya untuk per menit
+                key = (self.cbo_cam.currentData(), spec.key)
+                tail = self._tails.setdefault(key, LiveTail(spec.agg))
+                self._live_curves[spec.key] = {"curves": curves, "tail": tail}
+                self._redraw_tail(spec.key)
             return p
 
         if kind == "hourly":
@@ -322,6 +338,7 @@ class DashboardPage(QWidget):
             xs = [r["minute_ts"] for r in rows]
             for i, (key, name) in enumerate((("proc_fps", "FPS proses"), ("detect_ms", "detect (ms)"),
                                              ("module_ms", "modul (ms)"))):
-                p.plot(xs, [r[key] or 0 for r in rows], pen=pg.mkPen(PALETTE[i], width=2), name=name)
+                gx, gy = with_gaps(xs, [r[key] or 0 for r in rows], 60)
+                p.plot(gx, gy, pen=pg.mkPen(PALETTE[i], width=2), connect="finite", name=name)
             lay.addWidget(p)
         return box

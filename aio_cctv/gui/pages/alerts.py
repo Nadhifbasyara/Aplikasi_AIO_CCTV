@@ -244,8 +244,8 @@ class RuleEditor(QWidget):
 
     def _load_camera(self) -> None:
         cam = self.manager.cameras.get(self.cbo_cam.currentData())
-        self.rules = [dict(r) for r in cam.rules] if cam and cam.rules else \
-            [r.model_dump() for r in default_rules()]
+        rules = self.manager.profile(cam).rules if cam else []
+        self.rules = [r.model_dump() for r in (rules or default_rules())]
         self.dirty = False
         self.lbl_status.setText("" if cam else "Belum ada kamera.")
         self._refresh_list(0)
@@ -380,10 +380,10 @@ class RuleEditor(QWidget):
             QMessageBox.warning(self, "Aturan belum lengkap",
                                 f"Aturan {', '.join(problems)} belum memilih metrik/event.")
             return False
-        cam.rules = [r.model_dump(exclude_defaults=True) | {"id": r.id, "type": r.type}
-                     for r in rules]
-        self.manager.save()
-        self.dirty = False
+        profile = self.manager.profile(cam)
+        profile.rules = rules
+        self.dirty = False                         # sebelum save: cameras_changed memuat ulang
+        self.manager.save_profile(cam, profile)
         note = ""
         if self.manager.is_running(cam.id):
             self.manager.stop(cam.id)

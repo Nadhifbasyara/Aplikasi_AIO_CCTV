@@ -64,7 +64,7 @@ Usulan ini menghindari frasa "Multi-Object Tracking" dan "Platform Analitik" di 
 | 5 | [FASE-05 — Aplikasi Desktop (PyQt6)](FASE-05-aplikasi-desktop-pyqt6.md) | GUI: manajemen kamera, live view, editor zona | ⚠️ Sebagian (kamera fisik & SUS belum) | M4a | — |
 | **6** | [**FASE-06 — Integrasi Model & Modul Analitik Tim**](FASE-06-integrasi-model-modul-tim.md) | **Kontrak modul**, loader, YOLO11 dari paket modul, refaktor pipeline, alat uji kepatuhan | ⚠️ Sisi host selesai; menunggu modul TA-1/TA-2 | **M4b** | 2–3 minggu |
 | 7 | [FASE-07 — Penyimpanan, Dashboard, Alert & Laporan](FASE-07-penyimpanan-dashboard-alert-laporan.md) | SQLite **generik** (metrik/event dari modul), dashboard dari manifest, rule engine, CSV/PDF | ⚠️ Sebagian (uji beban & crash-safety belum) | M4c | 3 minggu |
-| 8 | [FASE-08 — Profil Kamera, Preset Modul & Import/Export](FASE-08-profil-konfigurasi-preset.md) | Profil v2 (kamera + modul + zona bertag + aturan), wizard preset, `.aioprofile` | Belum | **M4** | 1–2 minggu |
+| 8 | [FASE-08 — Profil, Preset, Import/Export & Dashboard Web Lokal](FASE-08-profil-konfigurasi-preset.md) | Profil v2 (kamera + modul + zona bertag + aturan), wizard preset, `.aioprofile`, **dashboard web di localhost** | ⚠️ Sebagian (uji 0-baris-kode dengan modul TA-1/TA-2 & uji LAN dari HP belum) | **M4** | 2–3 minggu |
 | 9 | [FASE-09 — Optimasi Sumber Daya Multi-Kamera, DVR & Packaging](FASE-09-optimasi-sumber-daya-packaging.md) | **InferenceServer + batching**, TensorRT/OpenVINO, sub-stream & HW decode, DVR multi-channel, uji kapasitas, installer | Belum | **M5** | 4 minggu |
 | 10 | [FASE-10 — Pengujian & Evaluasi](FASE-10-pengujian-evaluasi.md) | Kapasitas kamera/PC, ablation optimasi, keandalan RTSP/DVR, paritas modul, black-box, SUS | Belum | M5 | 3 minggu |
 | 11 | [FASE-11 — Dokumentasi & Laporan TA](FASE-11-dokumentasi-laporan-ta.md) | Buku TA, manual, panduan pembuat modul, demo, sidang | Paralel | **M6** | paralel + 3 minggu |
@@ -78,7 +78,7 @@ Usulan ini menghindari frasa "Multi-Object Tracking" dan "Platform Analitik" di 
 | M1–M3 | MVP deteksi, analitik baseline, live RTSP | ✅ Fase 2–4 |
 | **M4a** | GUI multi-kamera + editor zona (dengan modul baseline) | ✅ Fase 5 (sebagian) |
 | **M4b — Host modul** | Aplikasi memuat **modul TA-1 dan TA-2** (atau versi awalnya), dan keduanya bisa dipilih per kamera tanpa ubah kode | Fase 6 |
-| **M4 — Aplikasi lengkap** | + dashboard, alert, laporan, profil/preset | Fase 8 |
+| **M4 — Aplikasi lengkap** | + dashboard, alert, laporan, profil/preset, dashboard web localhost | Fase 8 |
 | **M5 — Terukur & siap rilis** | Kapasitas kamera/PC terukur sebelum dan sesudah optimasi, DVR multi-channel, installer | Fase 10 |
 | **M6 — Sidang** | Buku TA, demo, slide | Fase 11 |
 
@@ -124,6 +124,7 @@ flowchart TB
         RES --> RULE[Rule Engine / Alert]
         RES --> DB[(SQLite<br/>metrik & event generik)]
         DB --> DASH[Dashboard & Laporan<br/>CSV / PDF]
+        DB --> WEB[Dashboard web lokal<br/>http://localhost:8080]
         RULE --> NOTIF[Notifikasi<br/>tray / Telegram]
     end
     subgraph MOD["Modul analitik (milik TA-1 / TA-2), satu instans per kamera"]
@@ -154,6 +155,7 @@ Aplikasi_AIO_CCTV/
 │   ├── storage/               # (F7) SQLite generik, writer thread, agregator
 │   ├── alerts/                # (F7) rule engine generik
 │   ├── reports/               # (F7) ekspor CSV/PDF
+│   ├── web/                   # (F8) dashboard web lokal (FastAPI, localhost)
 │   ├── gui/                   # aplikasi PyQt6
 │   └── pipeline.py            # (F6) perakit Source → Inference → Modul
 ├── modules/                   # paket modul terpasang (pengembangan)

@@ -19,7 +19,10 @@ model:
 requirements:
   - supervision>=0.25
 
-regions: []                            # baseline memperlakukan semua zona & garis sama
+regions:                               # baseline memperlakukan semua zona & garis sama;
+                                       # peran di sini hanya label untuk preset & aturan alert
+  - {role: area,  kind: zone, label: "Area pantau", hint: "Lantai area yang ingin dihitung", multiple: true}
+  - {role: pintu, kind: line, label: "Pintu / jalur", hint: "Garis melintang jalur; arah panah = masuk"}
 
 params:
   grace_s:            {type: float, default: 1.5, min: 0,   max: 30,  label: "Grace period dwell (detik)"}

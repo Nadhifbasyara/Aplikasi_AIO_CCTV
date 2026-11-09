@@ -162,3 +162,75 @@ def test_reports_use_manifest_labels(writer, tmp_path):
     with open(next(f for f in files if "event" in f.name)) as fh:
         data = list(csv.DictReader(fh))
     assert len(data) == 30 and data[0]["waktu_lokal"].startswith("2026-11-09 10:00")
+
+
+def test_heat_of_running_hour_visible_before_hour_ends(writer):
+    ag = Aggregator("c1", "m", writer)
+    grid = np.zeros((2, 2), np.float32)
+    for i in range(70):                                   # 10:00:00–10:01:09, jam belum selesai
+        grid[0, 0] += 1
+        ag.consume(res(heat=grid), float(i), T0 + i)
+    writer.flush()                                        # tanpa ag.flush(): kamera masih jalan
+    assert q.heat_sum(writer.db_path, "c1", "m", T0, T0 + 3599)[0, 0] == 60
+    ag.flush()
+    writer.flush()
+    assert q.heat_sum(writer.db_path, "c1", "m", T0, T0 + 3599)[0, 0] == 70   # REPLACE, bukan +
+
+
+def test_with_gaps_breaks_line_only_across_missing_data():
+    import math
+
+    from aio_cctv.storage.dashboard_data import with_gaps
+    xs, ys = with_gaps([0, 60, 120, 2000, 2060], [1, 2, 3, 4, 5], bucket_s=60)
+    assert len(xs) == 6 and math.isnan(ys[3])             # satu pemutus di celah 120→2000
+    assert [y for y in ys if not math.isnan(y)] == [1, 2, 3, 4, 5]
+    assert with_gaps([0, 60, 120], [1, 1, 1], 60) == ([0, 60, 120], [1, 1, 1])
+
+
+def test_kpi_has_now_latest_avg_and_max(writer):
+    from aio_cctv.storage.dashboard_data import load_dashboard
+
+    class M:                                              # manifest minimal
+        id = "m"
+        def metric(self, key):
+            from aio_cctv.modules.manifest import MetricSpec
+            return MetricSpec(key=key, agg="avg")
+        metrics, events = [], []
+
+    ag = Aggregator("c1", "m", writer)
+    for i, v in enumerate([0] * 60 + [1] * 60 + [2] * 60):   # 3 menit: 0, 1, 2 orang
+        ag.consume(res([Metric("n", v)]), float(i), T0 + i)
+    ag.flush()
+    writer.flush()
+    (kpi, _health) = load_dashboard(writer.db_path, "c1", M(), [{"type": "kpi", "metric": "n"}],
+                                    T0, T0 + 3600, live=[["n", None, 3.0]])
+    assert kpi["values"] == {"": 1.0} and kpi["max"] == {"": 2.0}
+    assert kpi["latest"] == {"": (T0 + 120, 2.0)} and kpi["now"] == {"": 3.0}
+    (kpi_off, _) = load_dashboard(writer.db_path, "c1", M(), [{"type": "kpi", "metric": "n"}],
+                                  T0, T0 + 3600)
+    assert kpi_off["now"] == {}                           # kamera mati: pakai "terakhir"
+
+
+def test_live_tail_summarises_running_minute_like_the_database():
+    from aio_cctv.storage.dashboard_data import LiveTail
+    t = LiveTail("avg")
+    for i, v in enumerate([0, 2, 4]):                     # menit 10:00
+        t.add("z1", v, T0 + i)
+    t.add("z1", 9, T0 + 61)                               # menit 10:01
+    assert t.points("z1") == ([T0, T0 + 60], [2.0, 9.0])
+    assert t.points("z1", after=T0) == ([T0 + 60], [9.0])  # menit yang sudah tersimpan dilewati
+    assert LiveTail("max").points("x") == ([], [])
+    m = LiveTail("max")
+    for v in (1, 5, 3):
+        m.add("", v, T0)
+    assert m.points("")[1] == [5.0]
+    m.add("", 1, T0 + 1000)                               # sampel > 5 menit lalu dibuang
+    assert m.points("")[0] == [T0 + 960]
+
+
+def test_health_recorder_stores_stream_fps_as_recv_fps(writer):
+    h = HealthRecorder("c1", writer)
+    h.add({"state": "streaming", "stream_fps": 25.0, "proc_fps": 24.0}, T0)
+    h.flush()
+    writer.flush()
+    assert q.health(writer.db_path, "c1", T0, T0 + 60)[0]["recv_fps"] == 25.0

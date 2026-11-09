@@ -1,0 +1,28 @@
+{
+  "preset_id": "toko-kecil",
+  "label": "Toko kecil (contoh)",
+  "description": "Hitung orang di area kasir & antrean, dan lalu-lalang di pintu. Contoh format preset untuk TA-1/TA-2.",
+  "slots": [
+    {"key": "kasir",   "kind": "zone", "role": "area",  "label": "Area kasir",
+     "hint": "Gambar lantai di depan meja kasir"},
+    {"key": "antrean", "kind": "zone", "role": "area",  "label": "Area antrean",
+     "hint": "Gambar lantai tempat orang mengantre", "optional": true},
+    {"key": "pintu",   "kind": "line", "role": "pintu", "label": "Pintu masuk",
+     "hint": "Tarik garis melintang pintu; panah menunjuk arah MASUK"}
+  ],
+  "params": {"grace_s": 2.0, "min_dwell_s": 3.0},
+  "rules": [
+    {"id": "ramai", "type": "metric_gt", "metric": "zone_count", "region_role": "area",
+     "threshold": 4, "for_s": 30, "cooldown_s": 300, "message": "Area kasir/antrean ramai (> 4 orang)"},
+    {"id": "offline", "type": "camera_offline", "for_s": 60, "cooldown_s": 600,
+     "severity": "critical", "message": "Kamera tidak mengirim gambar lebih dari 1 menit"}
+  ],
+  "dashboard": [
+    {"type": "kpi", "metric": "people_count"},
+    {"type": "timeseries", "metric": "zone_count", "title": "Orang di area kasir & antrean"},
+    {"type": "hourly", "event": "line_cross", "title": "Lalu-lalang pintu"},
+    {"type": "event_stats", "event": "dwell_closed", "field": "duration_s", "title": "Lama kunjungan area"},
+    {"type": "events", "event": "dwell_closed", "title": "Kunjungan area"},
+    {"type": "heatmap"}
+  ]
+}

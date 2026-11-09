@@ -124,6 +124,7 @@ Ulangi uji Fase 4 dengan **build rilis** dan tambahkan DVR:
 | BB-18 | Privasi | Aktifkan blur | Semua orang ter-blur di tampilan & snapshot |
 | BB-19 | **Overload** | Tambah kamera melebihi `N_max` | FPS diturunkan merata; alert `overload`; aplikasi tidak macet |
 | BB-20 | Instalasi | Pasang di PC bersih | Aplikasi berjalan tanpa Python |
+| BB-21 | **Dashboard web** | Buka `http://localhost:8080`; lalu dari HP di LAN dengan & tanpa izin akses LAN | Angka sama dengan dashboard desktop; dari HP ditolak bila izin mati, minta login bila aktif |
 
 ### 5.2 Usability — SUS
 
@@ -153,7 +154,7 @@ Untuk setiap metrik: tabel → grafik → **analisis penyebab**. Contoh: "Pada m
 - [ ] Setiap RM punya jawaban berbasis data.
 - [ ] Uji paritas lulus untuk baseline + ≥ 1 modul rekan di backend PyTorch; selisih backend lain terdokumentasi.
 - [ ] `N_max` sebelum/sesudah optimasi untuk ≥ 2 perangkat × ≥ 2 modul.
-- [ ] Black-box 20/20 terisi; bug diperbaiki atau dicatat sebagai batasan.
+- [ ] Black-box 21/21 terisi; bug diperbaiki atau dicatat sebagai batasan.
 - [ ] SUS ≥ 10 responden.
 - [ ] Tag `v1.0.0` → **Milestone M5**.
 

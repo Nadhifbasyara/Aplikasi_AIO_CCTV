@@ -29,7 +29,6 @@ from PyQt6.QtWidgets import (
 )
 
 from aio_cctv.core import secrets
-from aio_cctv.core.paths import PROFILES_DIR
 from aio_cctv.gui.camera_manager import (
     CameraConfig,
     CameraManager,
@@ -43,7 +42,7 @@ from aio_cctv.modules.registry import DEFAULT_MODULE
 from aio_cctv.sources.probe import probe
 from aio_cctv.sources.snapshot import grab_frame
 from aio_cctv.sources.url_builder import BRANDS, mask
-from aio_cctv.zones.models import Profile, SourceConfig
+from aio_cctv.zones.models import SourceConfig
 
 KIND_IP, KIND_FILE, KIND_WEBCAM = 0, 1, 2
 VIDEO_FILTER = "Video (*.mp4 *.mkv *.avi *.mov *.webm);;Semua berkas (*)"
@@ -332,14 +331,12 @@ class AddCameraDialog(QDialog):
         """CameraConfig sementara dari isi formulir (belum disimpan)."""
         kind = self.cbo_kind.currentIndex()
         cam_id = self.editing.id if self.editing else "__baru__"
-        module = {"module_id": self.cbo_module.currentData() or DEFAULT_MODULE,
-                  "module_params": self.params_form.values(self._manifest())}
         if kind == KIND_FILE:
             return CameraConfig(cam_id, self.ed_name.text().strip(), "file",
-                                file_path=self.ed_path.text().strip(), **module)
+                                file_path=self.ed_path.text().strip())
         if kind == KIND_WEBCAM:
             return CameraConfig(cam_id, self.ed_name.text().strip(), "webcam",
-                                file_path=str(self.spin_cam.value()), **module)
+                                file_path=str(self.spin_cam.value()))
         return CameraConfig(
             cam_id, self.ed_name.text().strip(), self.cbo_brand.currentData(),
             host=self.ed_host.text().strip(),
@@ -347,7 +344,6 @@ class AddCameraDialog(QDialog):
             user=self.ed_user.text().strip(),
             stream=self.cbo_stream.currentData(),
             url=self.ed_url.text().strip(),
-            **module,
         )
 
     def _uri(self) -> str:
@@ -434,35 +430,46 @@ class AddCameraDialog(QDialog):
         if err := self._validate(cam):
             QMessageBox.warning(self, "Belum lengkap", err)
             return
+        module_id = self.cbo_module.currentData() or DEFAULT_MODULE
         if self._manifest() is None and QMessageBox.question(
                 self, "Modul tidak valid",
-                f"Modul “{cam.module_id}” tidak terpasang atau tidak valid, sehingga kamera "
+                f"Modul “{module_id}” tidak terpasang atau tidak valid, sehingga kamera "
                 "akan gagal dijalankan. Tetap simpan?") != QMessageBox.StandardButton.Yes:
             return
         if self.editing is None:
             cam.id = new_camera_id(cam.name, self.manager.cameras)
-        cam.profile_id = cam.id
+        cam.profile_id = self.editing.profile_id if self.editing and self.editing.profile_id \
+            else cam.id
+        cam.enabled = self.editing.enabled if self.editing else True
 
         if cam.brand not in ("file", "webcam") and self.ed_pass.text() != self._loaded_pw:
             secrets.set_password(cam.id, self.ed_pass.text())   # hanya ke keyring
 
-        profile_path = PROFILES_DIR / f"{cam.id}.json"
-        if not profile_path.exists():              # profil kosong, zona digambar di halaman Zona
-            Profile(profile_id=cam.id, source=SourceConfig(**source_config(cam))).save(profile_path)
+        # modul & parameter disimpan di profil (Fase 8); zona/aturan yang ada tidak disentuh
+        profile = self.manager.profile(cam)
+        if profile.module.module_id != module_id:
+            profile.module.preset_id = None        # preset milik modul lama
+        manifest = self._manifest()
+        profile.module.module_id = module_id
+        profile.module.module_version = manifest.version if manifest else ""
+        profile.module.params = self.params_form.values(manifest)
+        profile.source = SourceConfig(**source_config(cam))
+        profile.name = profile.name or cam.name
 
         self.manager.cameras[cam.id] = cam
-        self.manager.save()
+        self.manager.save_profile(cam, profile)
         self.saved.emit(cam.id)
         self.accept()
 
     def _load(self, cam: CameraConfig) -> None:
         self.ed_name.setText(cam.name)
-        if self.cbo_module.findData(cam.module_id) < 0:      # modul sudah dicopot
-            self.cbo_module.addItem(f"{cam.module_id} — tidak terpasang", cam.module_id)
+        binding = self.manager.profile(cam).module
+        if self.cbo_module.findData(binding.module_id) < 0:  # modul sudah dicopot
+            self.cbo_module.addItem(f"{binding.module_id} — tidak terpasang", binding.module_id)
         self.cbo_module.blockSignals(True)
-        self.cbo_module.setCurrentIndex(self.cbo_module.findData(cam.module_id))
+        self.cbo_module.setCurrentIndex(self.cbo_module.findData(binding.module_id))
         self.cbo_module.blockSignals(False)
-        self._on_module_changed(values=cam.module_params)
+        self._on_module_changed(values=binding.params)
         if cam.brand == "file":
             self.cbo_kind.setCurrentIndex(KIND_FILE)
             self.ed_path.setText(cam.file_path)

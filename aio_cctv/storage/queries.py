@@ -48,6 +48,14 @@ def metric_summary(db, cam, module, key, start, end, agg="avg") -> dict[str, flo
     return {reg: _combine(rows, agg) for reg, rows in by_region.items()}
 
 
+def metric_latest(db, cam, module, key, start, end) -> dict[str, tuple[float, float]]:
+    """{region_id: (epoch menit, nilai `last`)} dari menit tercatat paling akhir."""
+    out: dict[str, tuple[float, float]] = {}
+    for r in _metric_rows(db, cam, module, key, start, end):    # urut waktu: yang akhir menang
+        out[r["region_id"]] = (float(r["minute_ts"]), float(r["last"]))
+    return out
+
+
 def metric_series(db, cam, module, key, start, end, agg="avg",
                   bucket_s: int = 60) -> dict[str, tuple[list[float], list[float]]]:
     """{region_id: (epoch[], nilai[])} dengan bucket per menit (60) atau per jam (3600)."""

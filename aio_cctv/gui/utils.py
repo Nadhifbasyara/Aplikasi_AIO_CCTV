@@ -17,10 +17,13 @@ DEFAULTS = {
     "blur": False,               # mode anonim tampilan (Fase 7 §3.7)
     "retention_days": 90,        # 0 = simpan selamanya
     "tray_notify": True,         # notifikasi alert di tray
+    "web_enabled": True,         # dashboard web lokal (Fase 8 §8)
+    "web_port": 8080,
+    "web_lan": False,            # False = hanya 127.0.0.1; True = LAN + wajib login
 }
 _TYPES = {"stream": str, "display_fps": int, "device": str, "language": str,
           "autostart": bool, "realtime_file": bool, "blur": bool, "retention_days": int,
-          "tray_notify": bool}
+          "tray_notify": bool, "web_enabled": bool, "web_port": int, "web_lan": bool}
 
 
 def to_qimage(bgr: np.ndarray) -> QImage:

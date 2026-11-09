@@ -27,12 +27,13 @@ class PipelineWorker(QThread):
 
     def __init__(self, cam_id: str, source_uri: str, profile: Profile, settings: dict,
                  module: ModuleInfo | None, module_id: str = "", module_params: dict | None = None,
-                 storage=None, rules: list[Rule] | None = None):
+                 storage=None, rules: list[Rule] | None = None, frames=None):
         super().__init__()
         self.cam_id, self.uri, self.profile, self.settings = cam_id, source_uri, profile, settings
         self.module, self.module_id = module, module_id
         self.module_params = module_params or {}
         self.storage = storage                     # StorageWriter bersama, atau None (tanpa DB)
+        self.frames = frames                       # FrameHub bersama (web & ekspor), atau None
         self.rules = RuleEngine(rules or [])
         self.region_of_role: dict[str, set[str]] = defaultdict(set)
         for shape in [*profile.zones, *profile.lines]:
@@ -108,8 +109,11 @@ class PipelineWorker(QThread):
                     self.result_ready.emit(self.cam_id, res)
                     n += 1
                     if time.monotonic() - last_emit >= 1.0 / self.max_display_fps:
-                        self.frame_ready.emit(self.cam_id,           # batasi beban repaint GUI
-                                              to_qimage(pipe.annotate(f.image, res)))
+                        vis = pipe.annotate(f.image, res)
+                        self.frame_ready.emit(self.cam_id, to_qimage(vis))  # batasi repaint GUI
+                        if self.frames is not None:
+                            self.frames.put(self.cam_id, vis, f.image,
+                                            bool(self.settings.get("blur", False)))
                         last_emit = time.monotonic()
                     if self.realtime_file and isinstance(src, FileSource):
                         # tanpa ini file diputar secepat inferensi (§5.2); demo harus
@@ -140,6 +144,9 @@ class PipelineWorker(QThread):
                         "module": self.module.manifest.name,
                         "tracks": len(res.tracks) if res is not None else 0,
                         "metrics": self._camera_metrics(res),
+                        # nilai mentah terakhir [key, region_id, value] -> KPI "sekarang"
+                        "live_metrics": [[m.key, m.region_id, float(m.value)]
+                                         for m in res.metrics] if res is not None else [],
                         "reconnects": getattr(stream_stats, "reconnects", 0),
                         "downtime_s": getattr(stream_stats, "downtime_s", 0.0),
                         "latency_ms": latency_ms,
@@ -160,6 +167,8 @@ class PipelineWorker(QThread):
         except Exception as e:                     # jangan biarkan thread mati diam-diam
             self.error.emit(self.cam_id, f"{type(e).__name__}: {e}")
         finally:
+            if self.frames is not None:
+                self.frames.drop(self.cam_id)
             if agg is not None:                    # menit/jam yang belum lengkap tetap tersimpan
                 agg.flush()
                 health.flush()

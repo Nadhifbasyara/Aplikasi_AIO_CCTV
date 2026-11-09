@@ -1,7 +1,6 @@
 """Halaman Laporan: ekspor CSV & PDF per periode (Fase 7 §3.6)."""
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from datetime import time as dtime
 
@@ -21,13 +20,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from aio_cctv.core.paths import PROFILES_DIR
 from aio_cctv.gui.workers.net_tasks import run_async
 from aio_cctv.reports.csv_export import export_csv
 from aio_cctv.reports.pdf_report import CameraInfo, build_report, html_to_pdf
-from aio_cctv.zones.models import Profile
-
-log = logging.getLogger(__name__)
 
 
 class ReportsPage(QWidget):
@@ -98,16 +93,10 @@ class ReportsPage(QWidget):
             cam = self.manager.cameras.get(item.data(Qt.ItemDataRole.UserRole))
             if cam is None:
                 continue
-            info = self.manager.module_for(cam)
-            path = PROFILES_DIR / f"{cam.profile_id or cam.id}.json"
-            names = {}
-            try:
-                if path.exists():
-                    p = Profile.load(path)
-                    names = {z.id: z.name for z in p.zones} | {ln.id: ln.name for ln in p.lines}
-            except Exception as e:                 # profil rusak: zona tampil sebagai id
-                log.warning("profil %s tidak terbaca: %s", path.name, e)
-            cams.append(CameraInfo(cam.id, cam.name, info.manifest if info else None, names))
+            profile = self.manager.profile(cam)
+            info = self.manager.modules.get(profile.module.module_id)
+            cams.append(CameraInfo(cam.id, cam.name, info.manifest if info else None,
+                                   profile.region_names))
         start = datetime.combine(self.date_from.date().toPyDate(), dtime.min).timestamp()
         end = datetime.combine(self.date_to.date().toPyDate(), dtime.max).timestamp()
         return cams, start, end

@@ -39,7 +39,7 @@ from aio_cctv.gui.utils import app_settings, to_qimage
 from aio_cctv.gui.widgets.polygon_item import EditableLine, EditablePolygon
 from aio_cctv.gui.workers.net_tasks import run_async
 from aio_cctv.sources.snapshot import grab_frame
-from aio_cctv.zones.models import Line, Profile, SourceConfig, Zone, to_pixels
+from aio_cctv.zones.models import Line, Profile, Zone, to_pixels
 
 log = logging.getLogger(__name__)
 CLOSE_PX = 8                         # klik-ganda menutup poligon tanpa titik kembar
@@ -350,15 +350,11 @@ class ZoneEditorPage(QWidget):
 
     # ------------------------------------------------------------- profil
     def _load_profile(self) -> Profile:
-        path = self._profile_path()
-        if path.exists():
-            try:
-                return Profile.load(path)
-            except Exception as e:
-                log.warning("profil %s tidak terbaca: %s", path.name, e)
+        """Profil lengkap (modul, aturan, dashboard ikut) — hanya zona/garis yang diubah."""
         cam = self._cam
-        return Profile(profile_id=path.stem,
-                       source=SourceConfig(type="file", uri=cam.file_path if cam else ""))
+        if cam is not None:
+            return self.camera_manager.profile(cam)
+        return Profile(profile_id=self._profile_path().stem)
 
     def _rebuild_shapes(self) -> None:
         for s in self.shapes:

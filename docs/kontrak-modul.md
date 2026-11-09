@@ -84,6 +84,45 @@ dashboard:                         # widget bawaan (diformalkan di Fase 7)
 
 Host menolak modul (status **TIDAK VALID** di halaman Modul) jika ada field wajib yang hilang, `api_version` mayornya beda, file bobot/entrypoint tidak ada, requirement tidak terpenuhi, atau `key`/`type`/`role` duplikat.
 
+## 3a. Preset (opsional, disarankan)
+
+Preset adalah "template tempat" yang dipakai **wizard** di aplikasi (halaman Kamera → *Wizard preset…*). Pengguna memilih preset, lalu wizard memintanya menggambar setiap area satu per satu. Aturan alert dan dashboard terpasang otomatis. Preset ditulis sebagai JSON di `presets/<nama>.json`, **tanpa kode**.
+
+```json
+{
+  "preset_id": "minimarket",
+  "label": "Minimarket",
+  "description": "Pengunjung per jam, antrean kasir, area rak promo",
+  "slots": [
+    {"key": "pintu", "kind": "line", "role": "pintu", "label": "Pintu masuk",
+     "hint": "Tarik garis melintang pintu; panah = arah masuk"},
+    {"key": "kasir", "kind": "zone", "role": "kasir", "label": "Antrean kasir"},
+    {"key": "rak",   "kind": "zone", "role": "rak",   "label": "Rak promo",
+     "multiple": true, "optional": true}
+  ],
+  "params": {"min_dwell_s": 5},
+  "rules": [
+    {"id": "antrean", "type": "metric_gt", "metric": "zone_count", "region_role": "kasir",
+     "threshold": 4, "for_s": 30, "message": "Antrean kasir > 4 orang"}
+  ],
+  "dashboard": [
+    {"type": "kpi", "metric": "visitors_in"},
+    {"type": "hourly", "event": "masuk", "title": "Pengunjung per jam"},
+    {"type": "heatmap"}
+  ]
+}
+```
+
+| Bagian | Aturan |
+|---|---|
+| `slots[].role` | Harus ada di `regions` manifest dengan `kind` yang sama. Modul membacanya lewat `Region.role` |
+| `slots[].multiple` / `optional` | Boleh digambar lebih dari satu / boleh dilewati |
+| `params` | Kunci harus ada di `params` manifest |
+| `rules` | Format aturan alert aplikasi. Jenisnya: `metric_gt`, `metric_lt`, `event`, `camera_offline`, `module_error`, `overload`. `metric`/`event` harus terdaftar di manifest; `region_role` menyaring zona berdasarkan peran |
+| `dashboard` | Jenis widget: `kpi`, `timeseries`, `hourly`, `events`, `heatmap`, merujuk `metric`/`event` manifest |
+
+Preset yang salah **tidak** membuat modul tidak valid. Preset itu hanya disembunyikan dari wizard, dan peringatannya tampil di halaman Modul. Contoh lengkap: [`modules/baseline/presets/toko-kecil.json`](../modules/baseline/presets/toko-kecil.json).
+
 ## 4. Antarmuka Python
 
 Kelas entrypoint menurunkan `AnalyticsModule` dari [`aio_cctv/modules/api.py`](../aio_cctv/modules/api.py). File itu hanya bergantung pada `numpy` dan `supervision`. Saat dijalankan di dalam aplikasi, `from aio_cctv.modules.api import ...` langsung tersedia. Untuk pengembangan di repo kalian sendiri, salin saja file tersebut.

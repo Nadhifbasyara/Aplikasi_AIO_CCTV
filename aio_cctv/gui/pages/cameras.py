@@ -4,6 +4,7 @@ import logging
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QMessageBox,
@@ -16,8 +17,10 @@ from PyQt6.QtWidgets import (
 
 from aio_cctv.core import secrets
 from aio_cctv.core.paths import PROFILES_DIR
+from aio_cctv.core.profile_io import apply_import, export_profile, import_profile
 from aio_cctv.gui.camera_manager import CameraConfig, CameraManager, source_config
 from aio_cctv.gui.dialogs.add_camera import AddCameraDialog
+from aio_cctv.gui.dialogs.preset_wizard import PresetWizard
 from aio_cctv.sources.url_builder import BRANDS
 from aio_cctv.zones.models import Profile
 
@@ -56,6 +59,14 @@ class CamerasPage(QWidget):
         self.btn_edit = QPushButton("Ubah")
         self.btn_del = QPushButton("Hapus")
         self.btn_zones = QPushButton("Gambar zona")
+        self.btn_wizard = QPushButton("Wizard preset…")
+        self.btn_export = QPushButton("Ekspor profil…")
+        self.btn_import = QPushButton("Impor profil…")
+        self.btn_wizard.setToolTip("Pasang modul + preset: gambar area per langkah, aturan & "
+                                   "dashboard terpasang otomatis")
+        self.btn_wizard.clicked.connect(self._wizard)
+        self.btn_export.clicked.connect(self._export_profile)
+        self.btn_import.clicked.connect(self._import_profile)
         self.btn_add.clicked.connect(self.add_camera)
         self.btn_edit.clicked.connect(self.edit_camera)
         self.btn_del.clicked.connect(self.delete_camera)
@@ -66,7 +77,10 @@ class CamerasPage(QWidget):
         bar.addWidget(self.btn_edit)
         bar.addWidget(self.btn_del)
         bar.addWidget(self.btn_zones)
+        bar.addWidget(self.btn_wizard)
         bar.addStretch()
+        bar.addWidget(self.btn_export)
+        bar.addWidget(self.btn_import)
 
         lay = QVBoxLayout(self)
         lay.addLayout(bar)
@@ -86,9 +100,10 @@ class CamerasPage(QWidget):
         return source_config(cam)["uri"]
 
     def _module_label(self, cam: CameraConfig) -> str:
-        info = self.manager.module_for(cam)
+        mid = self.manager.module_id(cam)
+        info = self.manager.modules.get(mid)
         if info is None:
-            return f"{cam.module_id} (tidak terpasang)"
+            return f"{mid} (tidak terpasang)"
         return info.id if info.valid else f"{info.id} (tidak valid)"
 
     def _zone_summary(self, cam: CameraConfig) -> str:
@@ -126,7 +141,8 @@ class CamerasPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.blockSignals(False)
         has = bool(cams)
-        for b in (self.btn_edit, self.btn_del, self.btn_zones):
+        for b in (self.btn_edit, self.btn_del, self.btn_zones, self.btn_wizard, self.btn_export,
+                  self.btn_import):
             b.setEnabled(has)
 
     # --------------------------------------------------------------- aksi
@@ -179,3 +195,59 @@ class CamerasPage(QWidget):
     def _request_zones(self) -> None:
         if cam_id := self.selected_id():
             self.zones_requested.emit(cam_id)
+
+    # ------------------------------------------------------------ Fase 8
+    def _wizard(self) -> None:
+        if cam_id := self.selected_id():
+            PresetWizard(self.manager, cam_id, parent=self).exec()
+
+    def _export_profile(self) -> None:
+        if not (cam := self.manager.cameras.get(self.selected_id())):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Ekspor profil", f"{cam.id}.aioprofile", "Profil AIO-CCTV (*.aioprofile)")
+        if not path:
+            return
+        frame = self.manager.frames.get(cam.id)      # frame terakhir bila kamera berjalan
+        snap = None if frame is None else (frame.annotated if frame.blurred else frame.raw)
+        out = export_profile(self.manager.profile(cam), path, snap)
+        QMessageBox.information(self, "Profil diekspor",
+                                f"{out}\n\nTidak berisi URL atau kredensial kamera."
+                                + ("" if snap is not None else "\nSnapshot tidak disertakan "
+                                   "(kamera tidak sedang berjalan)."))
+
+    def _import_profile(self) -> None:
+        if not (cam := self.manager.cameras.get(self.selected_id())):
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Impor profil", "",
+                                              "Profil AIO-CCTV (*.aioprofile)")
+        if not path:
+            return
+        try:
+            imp = import_profile(path)
+        except Exception as e:                     # ZIP rusak / bukan .aioprofile
+            QMessageBox.warning(self, "Gagal mengimpor", str(e))
+            return
+        p = imp.profile
+        mid = p.module.module_id
+        info = self.manager.modules.get(mid)
+        notes = []
+        if info is None or not info.valid:
+            notes.append(f"⚠ Modul “{mid}” belum terpasang/valid di PC ini.")
+        elif p.module.module_version and info.manifest.version != p.module.module_version:
+            notes.append(f"⚠ Versi modul berbeda: profil {p.module.module_version}, "
+                         f"terpasang {info.manifest.version}.")
+        if QMessageBox.question(
+                self, "Impor profil",
+                f"Terapkan ke kamera “{cam.name}”?\n\nModul: {mid}\n"
+                f"{len(p.zones)} zona, {len(p.lines)} garis, {len(p.rules)} aturan.\n"
+                f"Profil kamera ini saat ini akan DIGANTI.\n\n" + "\n".join(notes)
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self.manager.save_profile(cam, apply_import(self.manager.profile(cam), p))
+        if self.manager.is_running(cam.id):
+            self.manager.stop(cam.id)
+            self.manager.start(cam.id)
+        QMessageBox.information(self, "Profil diimpor",
+                                "Periksa posisi zona di halaman Zona: sudut kamera tujuan bisa "
+                                "berbeda dari kamera asal.")

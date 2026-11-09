@@ -1,13 +1,15 @@
 import json
 import logging
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from aio_cctv.alerts.rules import RuleEngine, parse_rules
 from aio_cctv.core import secrets
+from aio_cctv.core.framehub import FrameHub
 from aio_cctv.core.paths import CAMERAS_FILE, DB_FILE, PROFILES_DIR
 from aio_cctv.gui.utils import app_settings
 from aio_cctv.gui.workers.pipeline_worker import PipelineWorker
@@ -16,6 +18,7 @@ from aio_cctv.sources.url_builder import build_url, mask
 from aio_cctv.storage.aggregator import record_alert
 from aio_cctv.storage.db import purge
 from aio_cctv.storage.writer import StorageWriter
+from aio_cctv.web.state import CameraView, WebState
 from aio_cctv.zones.models import Profile, SourceConfig
 
 log = logging.getLogger(__name__)
@@ -38,9 +41,10 @@ class CameraConfig:
     url: str = ""            # hanya untuk brand "custom": URL RTSP lengkap tanpa kredensial
     profile_id: str = ""
     enabled: bool = True
-    module_id: str = DEFAULT_MODULE  # modul analitik (Fase 6); kamera lama otomatis baseline
-    module_params: dict = field(default_factory=dict)   # menimpa default manifest
-    rules: list = field(default_factory=list)   # aturan alert (Fase 7); kosong = bawaan host
+    # Fase 8: modul, parameter modul, dan aturan alert disimpan di Profile, bukan di sini.
+
+
+LEGACY_KEYS = ("module_id", "module_params", "rules")   # cameras.json Fase 6–7
 
 
 def with_credentials(url: str, user: str, password: str) -> str:
@@ -78,6 +82,7 @@ class CameraManager(QObject):
     worker_started = pyqtSignal(str)
     worker_stopped = pyqtSignal(str)
     alert_raised = pyqtSignal(str, dict)       # cam_id, alert (sudah tertulis ke DB)
+    stats_updated = pyqtSignal(str, dict)      # cam_id, statistik worker (tiap detik)
 
     def __init__(self, db_path=DB_FILE):
         super().__init__()
@@ -89,6 +94,7 @@ class CameraManager(QObject):
 
         # Fase 7: satu writer SQLite untuk semua kamera + aturan host + sumber daya PC
         self.db_path = db_path
+        self.frames = FrameHub()                   # frame terakhir per kamera (web, ekspor)
         self.storage = StorageWriter(db_path)      # membuat skema bila DB belum ada
         try:
             if removed := purge(db_path, app_settings()["retention_days"]):
@@ -96,6 +102,17 @@ class CameraManager(QObject):
         except Exception as e:                     # DB terkunci: coba lagi saat dibuka berikutnya
             log.warning("retensi data dilewati: %s", e)
         self.storage.start()
+
+        # Fase 8: dashboard web lokal — state aman-thread, server dijalankan start_web()
+        self.web_state = WebState(db_path, self.frames)
+        self.web = None
+        self.web_error = ""
+        self._sync_web()
+        self.cameras_changed.connect(self._sync_web)
+        self.modules_changed.connect(self._sync_web)
+        self.worker_started.connect(lambda cid: self.web_state.set_running(cid, True))
+        self.worker_stopped.connect(lambda cid: self.web_state.set_running(cid, False))
+
         self._host_rules: dict[str, RuleEngine] = {}
         self._last_stats: dict[str, dict] = {}
         self._host_timer = QTimer(self)
@@ -115,13 +132,70 @@ class CameraManager(QObject):
         self.modules = discover()
         self.modules_changed.emit()
 
+    # ------------------------------------------------------------ profil (Fase 8)
+    @staticmethod
+    def profile_path(cam: CameraConfig) -> Path:
+        return PROFILES_DIR / f"{cam.profile_id or cam.id}.json"
+
+    def profile(self, cam: CameraConfig) -> Profile:
+        """Profil kamera; kamera yang zonanya belum digambar tetap boleh jalan."""
+        path = self.profile_path(cam)
+        if path.exists():
+            try:
+                return Profile.load(path)
+            except Exception as e:                 # profil rusak: jangan jatuhkan aplikasi
+                log.warning("profil %s tidak terbaca (%s); memakai profil kosong", path.name, e)
+        return Profile(profile_id=path.stem, name=cam.name,
+                       source=SourceConfig(**source_config(cam)))
+
+    def save_profile(self, cam: CameraConfig, profile: Profile) -> None:
+        profile.save(self.profile_path(cam))
+        if cam.profile_id != self.profile_path(cam).stem:
+            cam.profile_id = self.profile_path(cam).stem
+        self.save()                                # memicu cameras_changed (halaman lain segar)
+
+    def module_id(self, cam: CameraConfig) -> str:
+        return self.profile(cam).module.module_id
+
     def module_for(self, cam: CameraConfig) -> ModuleInfo | None:
-        return self.modules.get(cam.module_id)
+        return self.modules.get(self.module_id(cam))
 
     def load(self) -> None:
-        if CAMERAS_FILE.exists():
-            for c in json.loads(CAMERAS_FILE.read_text()):
-                self.cameras[c["id"]] = CameraConfig(**c)
+        if not CAMERAS_FILE.exists():
+            return
+        known = {f.name for f in fields(CameraConfig)}
+        migrated = False
+        for c in json.loads(CAMERAS_FILE.read_text()):
+            legacy = {k: c[k] for k in LEGACY_KEYS if k in c}
+            cam = CameraConfig(**{k: v for k, v in c.items() if k in known})
+            self.cameras[cam.id] = cam
+            if legacy:
+                self._migrate_camera(cam, legacy)
+                migrated = True
+        if migrated:                               # tulis ulang cameras.json tanpa kunci lama
+            CAMERAS_FILE.write_text(json.dumps([asdict(c) for c in self.cameras.values()],
+                                               indent=2))
+
+    def _migrate_camera(self, cam: CameraConfig, legacy: dict) -> None:
+        """Fase 6–7 menyimpan modul & aturan di cameras.json; Fase 8 memindahkannya ke profil.
+        Profil yang sudah v2 (punya kunci "module") tidak ditimpa."""
+        path = self.profile_path(cam)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except Exception:
+            raw = {}
+        if "module" in raw:
+            return
+        profile = self.profile(cam)
+        profile.module.module_id = legacy.get("module_id") or DEFAULT_MODULE
+        profile.module.params = dict(legacy.get("module_params") or {})
+        try:
+            profile.rules = parse_rules(legacy["rules"]) if legacy.get("rules") else []
+        except Exception as e:
+            log.warning("aturan lama kamera %s tidak valid (%s); dibuang", cam.id, e)
+        profile.save(path)
+        cam.profile_id = path.stem
+        log.info("kamera %s: modul & aturan dipindah ke profil %s", cam.id, path.name)
 
     def save(self) -> None:
         CAMERAS_FILE.write_text(json.dumps([asdict(c) for c in self.cameras.values()], indent=2))
@@ -131,16 +205,6 @@ class CameraManager(QObject):
         pw = secrets.get_password(cam.id)          # dari OS keyring, bukan dari file
         return build_source_uri(cam, pw)
 
-    def _load_profile(self, cam: CameraConfig) -> Profile:
-        """Profil kamera; kamera yang zonanya belum digambar tetap boleh jalan."""
-        path = PROFILES_DIR / f"{cam.profile_id}.json"
-        if cam.profile_id and path.exists():
-            return Profile.load(path)
-        return Profile(                            # tanpa zona/garis: deteksi + tracking saja
-            profile_id=cam.profile_id or cam.id,
-            source=SourceConfig(**source_config(cam)),
-        )
-
     def is_running(self, cam_id: str) -> bool:
         return cam_id in self.workers
 
@@ -148,16 +212,14 @@ class CameraManager(QObject):
         if (running := self.workers.get(cam_id)) is not None:
             return running
         cam = self.cameras[cam_id]
-        try:
-            rules = parse_rules(cam.rules)
-        except Exception as e:                     # aturan rusak di cameras.json: pakai bawaan
-            log.warning("aturan kamera %s tidak valid (%s); memakai aturan bawaan", cam_id, e)
-            rules = parse_rules(None)
+        profile = self.profile(cam)
+        rules = profile.rules or parse_rules(None)  # kosong = aturan bawaan host
         self._host_rules[cam_id] = RuleEngine(rules)
         self._last_stats.pop(cam_id, None)
-        w = PipelineWorker(cam_id, self.source_uri(cam), self._load_profile(cam),
-                           settings or app_settings(), self.module_for(cam), cam.module_id,
-                           cam.module_params, storage=self.storage, rules=rules)
+        mid = profile.module.module_id
+        w = PipelineWorker(cam_id, self.source_uri(cam), profile, settings or app_settings(),
+                           self.modules.get(mid), mid, profile.module.params,
+                           storage=self.storage, rules=rules, frames=self.frames)
         w.finished.connect(lambda cid=cam_id, worker=w: self._on_worker_finished(cid, worker))
         w.stats_ready.connect(self._on_stats)
         w.error.connect(self._on_error)
@@ -193,8 +255,38 @@ class CameraManager(QObject):
         for cid in list(self.workers):
             self.stop(cid)
 
+    # ------------------------------------------------------------ dashboard web (Fase 8)
+    def _sync_web(self) -> None:
+        self.web_state.set_modules(self.modules)
+        self.web_state.set_cameras([CameraView(c.id, c.name, self.module_id(c), self.profile_path(c))
+                                    for c in self.cameras.values()])
+
+    def start_web(self, settings: dict | None = None) -> bool:
+        from aio_cctv.web.auth import web_password_hash
+        from aio_cctv.web.server import WebServer
+
+        self.stop_web()
+        s = settings or app_settings()
+        if not s["web_enabled"]:
+            self.web_error = ""
+            return False
+        self.web_state.auth_required = bool(s["web_lan"])
+        self.web_state.password_hash = web_password_hash() if s["web_lan"] else ""
+        server = WebServer(self.web_state, int(s["web_port"]), bool(s["web_lan"]))
+        if server.start():
+            self.web, self.web_error = server, ""
+            return True
+        self.web_error = server.error
+        return False
+
+    def stop_web(self) -> None:
+        if self.web is not None:
+            self.web.stop()
+            self.web = None
+
     def shutdown(self) -> None:
         """Dipanggil saat aplikasi ditutup: worker berhenti dulu (flush agregat), lalu writer."""
+        self.stop_web()
         self._host_timer.stop()
         self._sys_timer.stop()
         self.stop_all()
@@ -208,8 +300,11 @@ class CameraManager(QObject):
 
     def _on_stats(self, cam_id: str, s: dict) -> None:
         self._last_stats[cam_id] = s
+        self.web_state.set_stats(cam_id, s)
+        self.stats_updated.emit(cam_id, s)
 
     def _on_error(self, cam_id: str, msg: str) -> None:
+        self.web_state.set_error(cam_id, msg)
         if msg.startswith("Modul error") and (eng := self._host_rules.get(cam_id)) is not None:
             self._emit_host_alerts(cam_id, eng.evaluate_host(time.monotonic(), None, True, None))
 
