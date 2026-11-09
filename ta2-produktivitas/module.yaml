@@ -1,0 +1,40 @@
+id: ta2-produktivitas              # unik, huruf kecil-strip
+name: Pemantauan Produktivitas Pegawai
+version: 0.1.0                     # versi modul (SemVer)
+api_version: "1.0"                 # versi kontrak yang diikuti
+authors: ["Tim TA-2"]
+license: "AGPL-3.0"
+entrypoint: analyzer:ProductivityModule   # <file>:<kelas>
+
+model:                             # dimuat host melalui Ultralytics YOLO(...)
+  weights: weights/yolo11s-pegawai.pt
+  task: detect                     # detect | pose (keypoints diteruskan via det.data)
+  imgsz: 640
+  conf: 0.35
+  iou: 0.5
+  classes: [pegawai]               # subset dari model.names; kosong = semua kelas
+
+requirements:                      # dicek saat modul dimuat; dipasang saat packaging (F9)
+  - boxmot==11.0.2
+  - ultralytics>=8.3
+
+regions:                           # peran zona yang dipahami modul (dipakai wizard Fase 8)
+  - {role: meja_kerja,   kind: zone, label: "Meja kerja",     hint: "Gambar area meja tiap pegawai", multiple: true}
+  - {role: area_istirahat, kind: zone, label: "Area istirahat", optional: true}
+
+params:                            # parameter yang bisa diatur pengguna (divalidasi host)
+  idle_threshold_s: {type: float, default: 300, min: 10, label: "Batas idle (detik)"}
+  min_fps:          {type: float, default: 8, label: "FPS minimum tracker"}
+
+metrics:                           # nilai numerik per frame atau per interval
+  - {key: people_count, label: "Jumlah pegawai",   unit: "orang", per_region: true, agg: avg}
+  - {key: active_ratio, label: "Rasio aktif",      unit: "%",     per_region: true, agg: avg}
+
+events:                            # kejadian diskrit
+  - {type: idle_long,  label: "Pegawai idle terlalu lama", fields: {duration_s: float}}
+  - {type: left_desk,  label: "Meninggalkan meja kerja",  fields: {duration_s: float}}
+
+dashboard:                         # widget default (Fase 7)
+  - {type: kpi,        metric: people_count}
+  - {type: timeseries, metric: active_ratio, title: "Rasio aktif per zona"}
+  - {type: events,     event: idle_long}
