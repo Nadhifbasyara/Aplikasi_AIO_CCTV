@@ -12,3 +12,22 @@ dist/
 *.spec
 .env
 outputs/
+
+# paket & cache alat
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# data lokal aplikasi (bila tersimpan di folder proyek)
+*.db
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.aioprofile
+*.log
+
+# program server RTSP (unduh sendiri dari GitHub MediaMTX); mediamtx.yml tetap disimpan
+/mediamtx
+
+# gambar contoh bawaan Ultralytics
+/bus.jpg
