@@ -33,7 +33,7 @@
 | **Abstrak** | Masalah (CCTV pasif, PC edge terbatas, model analitik terpisah dari aplikasi), metode (host modular + RTSP/DVR + optimasi), hasil utama (`N_max` sebelum→sesudah, uji paritas, waktu pulih RTSP, SUS) | Hasil Fase 10 |
 | **Bab I Pendahuluan** | Latar belakang; posisi TA ini dalam topik bersama (diagram 3 TA); RM-1..3; tujuan; batasan (tidak melatih/mengevaluasi model, tidak merancang metrik perilaku); manfaat | Roadmap §0–§1, Proposal §3 |
 | **Bab II Tinjauan Pustaka** | Penelitian terkait (VMS/NVR komersial, Frigate, DeepStream, Savant, analitik edge); dasar teori: RTSP/RTP, ONVIF, H.264/H.265 & HW decode, YOLO secara ringkas, inferensi teroptimasi (TensorRT, ONNX Runtime, OpenVINO, FP16, batching), konkurensi Python (GIL, thread vs proses, shared memory), arsitektur plugin, Qt threading, SQLite, UU PDP | Fase 4, 6, 9 |
-| **Bab III Metodologi & Perancangan** | Alur penelitian; kebutuhan fungsional/non-fungsional; arsitektur host–modul; **kontrak modul**; rancangan InferenceServer & penjadwalan; DVR multi-channel; skema data generik; rancangan UI; rancangan pengujian (definisi `N_max`, uji paritas) | Fase 5–9 |
+| **Bab III Metodologi & Perancangan** | Alur penelitian; kebutuhan fungsional/non-fungsional; arsitektur host–modul; **kontrak modul**; rancangan InferenceServer & penjadwalan; rancangan backend DeepStream (Jalur B) dan batas tugasnya; DVR multi-channel; skema data generik; rancangan UI; rancangan pengujian (definisi `N_max`, uji paritas) | Fase 5–9 |
 | **Bab IV Implementasi & Pengujian** | Implementasi per komponen; integrasi modul TA-1/TA-2; hasil paritas, keandalan RTSP/DVR, ablation & `N_max`, soak test, black-box, SUS + analisis | Fase 6–10 |
 | **Bab V Penutup** | Kesimpulan per RM; saran (Re-ID lintas kamera di host, inferensi Re-ID bersama, cluster multi-PC, kamera cloud-only, sinkronisasi cloud) | Fase 10 §6 |
 | **Lampiran** | Kontrak modul v1 + JSON Schema profil, matriks kompatibilitas kamera/DVR, tabel ablation lengkap, black-box, kuesioner SUS, manual pengguna | Fase 4, 6, 8, 9, 10 |
@@ -102,7 +102,8 @@ Siapkan **demo cadangan** berupa video rekaman demo + MediaMTX lokal + modul bas
 | Mengapa deteksi dijalankan host, bukan modul? | Agar satu model bisa dipakai bersama dan di-batch lintas kamera, yang merupakan sumber peningkatan kapasitas terbesar (angka Fase 9) |
 | Bagaimana menjamin hasil di aplikasi sama dengan hasil penelitian teman? | Uji paritas per frame (Fase 10 §4.1), termasuk dampak FP16 |
 | Bagaimana jika modul teman lambat? | `module_ms` diukur terpisah; kapasitas dilaporkan per modul; batas host terlihat dari modul baseline |
-| Mengapa Python, bukan C++/DeepStream? | Ekosistem modul rekan (Ultralytics/boxmot) berbasis Python; kontrak sederhana bagi pembuat modul; GIL ditangani dengan pengukuran dan opsi multi-proses; DeepStream dibahas di Bab II sebagai pembanding |
+| Mengapa memakai DeepStream, dan mengapa tetap ada jalur Python? | DeepStream memindahkan decode–batching–deteksi ke GPU sehingga CPU lega (angka Jalur B, Fase 9 §7). Jalur Python tetap ada karena modul rekan (tracker, Re-ID, analitik) berbasis Python, dan agar aplikasi jalan di PC tanpa GPU NVIDIA / Windows. Kedua jalur memakai kontrak modul yang sama |
+| Mengapa tidak memakai `nvtracker` DeepStream? | Tracker adalah objek penelitian TA-1/TA-2. Memakai tracker lain membuat hasil aplikasi berbeda dari hasil penelitian rekan (uji paritas gagal) |
 | Kenapa tidak pakai pengenalan wajah? | UU PDP No. 27/2022; analitik anonim; Re-ID TA-2 hanya di memori, tidak disimpan |
 | Bagaimana keamanan kredensial kamera/DVR? | OS keyring, masking log, LAN-only, tanpa port-forward |
 | Mengapa SQLite? | Zero-install, cukup untuk skala edge, skema generik tidak perlu migrasi per modul |

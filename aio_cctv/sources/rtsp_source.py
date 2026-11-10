@@ -4,6 +4,7 @@ import os
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")  # sebelum import cv2
 
 import logging
+import random
 import threading
 import time
 from dataclasses import dataclass, field
@@ -33,6 +34,8 @@ class StreamStats:
     recv_fps: float = 0.0
     bytes_received: int = 0
     bandwidth_kbps: float = 0.0
+    decode_ms: float = 0.0             # rata-rata bergerak decode per frame (thread penerima)
+    convert_ms: float = 0.0            # konversi ke BGR, hanya frame yang dipakai (thread worker)
     _fps_window: list = field(default_factory=list)
     _bw_window: list = field(default_factory=list)
 
@@ -58,6 +61,7 @@ class RTSPSource:
         self.stats = StreamStats()
         self.fps, self.resolution = 0.0, (0, 0)
         self._latest: Frame | None = None
+        self._latest_av = None             # (VideoFrame, ts, wall_ts, seq) belum dikonversi
         self._last_consumed_seq = 0
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -83,12 +87,27 @@ class RTSPSource:
     # ---------- konsumen ----------
     def read(self) -> Frame | None:
         with self._lock:
-            f = self._latest
+            f, raw = self._latest, self._latest_av
+        if raw is not None:                    # PyAV: konversi BGR baru dilakukan di sini, jadi
+            av_frame, ts, wall, seq = raw      # frame yang tertimpa sebelum dibaca tidak pernah
+            if seq == self._last_consumed_seq:  # dikonversi (Fase 9 §5.3)
+                return None
+            t0 = time.perf_counter()
+            f = Frame(av_frame.to_ndarray(format="bgr24"), ts, wall, seq)
+            self.stats.convert_ms += 0.1 * ((time.perf_counter() - t0) * 1e3
+                                            - self.stats.convert_ms)
         if f is None or f.seq == self._last_consumed_seq:
             return None
         self._last_consumed_seq = f.seq
         self.stats.frames_consumed += 1
         return f
+
+    def has_new(self) -> bool:
+        """Ada frame yang belum dibaca (tanpa mengonsumsinya)."""
+        with self._lock:
+            seq = self._latest_av[3] if self._latest_av is not None else (
+                self._latest.seq if self._latest is not None else 0)
+        return seq != 0 and seq != self._last_consumed_seq
 
     # ---------- produsen (thread) ----------
     def _open_cv(self) -> cv2.VideoCapture | None:
@@ -134,7 +153,7 @@ class RTSPSource:
                             mask(str(exc)), backoff)
                 if container is not None:
                     container.close()
-                self._stop.wait(backoff)
+                self._stop.wait(backoff * random.uniform(0.75, 1.25))   # jitter: channel DVR tidak serentak
                 backoff = min(backoff * 2, self.max_backoff_s)
                 continue
 
@@ -150,17 +169,20 @@ class RTSPSource:
                     if self._stop.is_set():
                         break
                     compressed_bytes = packet.size if packet.size else 0
+                    t_dec = time.perf_counter()
                     frames = packet.decode()
                     for av_frame in frames:
                         seq += 1
                         now_m, now_w = time.monotonic(), time.time()
-                        img = av_frame.to_ndarray(format="bgr24")
+                        dec = (time.perf_counter() - t_dec) * 1e3
+                        self.stats.decode_ms += 0.1 * (dec - self.stats.decode_ms)
+                        t_dec = time.perf_counter()
                         self.stats.bytes_received += compressed_bytes
                         self._update_fps(now_m, compressed_bytes)
                         self.stats.frames_received += 1
                         self.stats.last_frame_wall = now_w
                         with self._lock:
-                            self._latest = Frame(img, now_m, now_w, seq)
+                            self._latest_av = (av_frame, now_m, now_w, seq)
                         compressed_bytes = 0
             except Exception as exc:
                 if not self._stop.is_set():
@@ -184,7 +206,7 @@ class RTSPSource:
                 self.state = "reconnecting"
                 down_since = down_since or time.monotonic()
                 log.warning("[%s] gagal terhubung, coba lagi %.0fs", self.name, backoff)
-                self._stop.wait(backoff)
+                self._stop.wait(backoff * random.uniform(0.75, 1.25))   # jitter: channel DVR tidak serentak
                 backoff = min(backoff * 2, self.max_backoff_s)
                 continue
 

@@ -123,6 +123,31 @@ class SettingsPage(QWidget):
         self.cbo_lang.addItem("Indonesia", "id")
         self.cbo_lang.setEnabled(False)
         self.cbo_lang.setToolTip("Terjemahan antarmuka belum tersedia (rencana Fase 10).")
+        self.chk_shared = QCheckBox("Satu model bersama untuk semua kamera (InferenceServer + batching)")
+        self.chk_shared.setToolTip("Kamera yang memakai modul sama berbagi satu model YOLO dan "
+                                   "dideteksi bersama dalam satu batch. Hemat VRAM dan menaikkan "
+                                   "jumlah kamera yang sanggup dilayani.")
+        self.spin_batch = QSpinBox()
+        self.spin_batch.setRange(1, 32)
+        self.spin_batch.setSuffix(" frame")
+        self.spin_target = QSpinBox()
+        self.spin_target.setRange(0, 60)
+        self.spin_target.setSuffix(" fps")
+        self.spin_target.setSpecialValueText("ikuti kamera")
+        self.spin_target.setToolTip("Analisis kamera RTSP dibatasi ke FPS ini; frame di antaranya "
+                                    "dilewati sebelum deteksi. Jangan di bawah FPS minimum tracker "
+                                    "modul (umumnya 8).")
+        optim = QGroupBox("Optimasi multi-kamera")
+        f6 = QFormLayout(optim)
+        f6.addRow("", self.chk_shared)
+        f6.addRow("Ukuran batch maks", self.spin_batch)
+        f6.addRow("FPS analisis maks", self.spin_target)
+        hint = QLabel("Tile Live yang tidak terlihat (pindah halaman, jendela diminimalkan) tidak "
+                      "digambar ulang, jadi tenaga PC dipakai untuk analisis.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#888;")
+        f6.addRow("", hint)
+
         umum = QGroupBox("Umum")
         f3 = QFormLayout(umum)
         f3.addRow("Bahasa", self.cbo_lang)
@@ -144,6 +169,7 @@ class SettingsPage(QWidget):
         lay.addWidget(tampilan)
         lay.addWidget(privasi)
         lay.addWidget(web)
+        lay.addWidget(optim)
         lay.addWidget(umum)
         lay.addLayout(bar)
         lay.addWidget(self.lbl_status)
@@ -165,6 +191,9 @@ class SettingsPage(QWidget):
         self.chk_lan.setChecked(s["web_lan"])
         self._show_web_status()
         self.cbo_lang.setCurrentIndex(max(0, self.cbo_lang.findData(s["language"])))
+        self.chk_shared.setChecked(s["inference"] == "shared")
+        self.spin_batch.setValue(s["max_batch"])
+        self.spin_target.setValue(s["target_fps"])
 
     def values(self) -> dict:
         return {
@@ -180,6 +209,9 @@ class SettingsPage(QWidget):
             "web_port": self.spin_port.value(),
             "web_lan": self.chk_lan.isChecked(),
             "language": self.cbo_lang.currentData(),
+            "inference": "shared" if self.chk_shared.isChecked() else "per_camera",
+            "max_batch": self.spin_batch.value(),
+            "target_fps": self.spin_target.value(),
         }
 
     # ------------------------------------------------------------ dashboard web

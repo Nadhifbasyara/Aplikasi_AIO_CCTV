@@ -34,3 +34,23 @@ def test_error_messages_never_carry_camera_passwords():
     raw = "Server returned 400 Bad Request: 'rtsp://ceits:R4has1a%21@10.0.0.1:8554/live'"
     assert "R4has1a" not in mask(raw) and "rtsp://ceits:****@10.0.0.1" in mask(raw)
     assert "R4has1a" not in friendly_error(raw)
+
+
+def test_dvr_channel_urls_and_masking():
+    from aio_cctv.gui.camera_manager import CameraConfig, build_source_uri
+    from aio_cctv.sources.url_builder import build_url, has_channels, mask
+
+    assert has_channels("hikvision") and has_channels("dahua") and not has_channels("tapo")
+    assert build_url("hikvision", "192.0.2.10", "u", "p", "main", channel=12).endswith(
+        "/Streaming/Channels/1201")
+    assert build_url("hikvision", "192.0.2.10", "u", "p", "sub", channel=3).endswith(
+        "/Streaming/Channels/302")
+    assert "channel=4&subtype=1" in build_url("dahua", "192.0.2.10", "u", "p", "sub", channel=4)
+    assert "channel=2&stream=0" in build_url("xmeye", "192.0.2.10", "u", "rahasia", "main",
+                                             channel=2)
+    assert build_url("tapo", "192.0.2.10", "u", "p", "sub", channel=5).endswith("/stream2")
+    cam = CameraConfig("uji-dvr", "DVR CH2", "dahua", host="192.0.2.10", user="admin", channel=2)
+    uri = build_source_uri(cam, "rahasia")
+    assert "channel=2" in uri and "rahasia" not in mask(uri)
+    # cameras.json lama tanpa kunci channel/device tetap terbaca
+    assert CameraConfig("uji-lama", "Lama", "hikvision").channel == 1

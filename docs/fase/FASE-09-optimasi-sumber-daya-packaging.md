@@ -4,6 +4,8 @@
 > Referensi Proposal: **§3** (analitik real-time di PC/edge berbiaya wajar), **§10** (skalabilitas kamera per node)
 > Estimasi: **4 minggu** · Milestone: **M5** (bagian 1) · Menjawab: **RM-3** (utama) dan **RM-2** (DVR)
 > *Revisi 2026-11-09: dahulu FASE-08. Kini menjadi **kontribusi inti**. Metrik utamanya diubah dari "FPS 1 kamera" menjadi **kapasitas kamera per PC**, dan ditambah integrasi DVR/NVR multi-channel.*
+> **Status 2026-11-10:** alat ukur, baseline, InferenceServer + batching, FPS target, render hemat, dan DVR multi-channel selesai; `N_max` 10 → 16 (Live terlihat) / 20 (analisis saja); prototipe multi-proses ±40. Rincian: [logbook 2026-11-10](../logbook/2026-11-10-fase-09.md).
+> *Revisi 2026-11-10: ditambah **NVIDIA DeepStream** sebagai backend pipeline kedua (**Jalur B**, §5.8). Jalur Python yang sudah ada menjadi **Jalur A**. Kedua jalur diukur dengan kriteria §2 yang sama lalu dibandingkan (§7).*
 
 ---
 
@@ -11,7 +13,9 @@
 
 1. Mendefinisikan dan **mengukur kapasitas** `N_max`, yaitu jumlah kamera maksimum yang dapat dilayani satu PC edge dengan kualitas layanan terjaga.
 2. Menerapkan teknik optimasi secara **bertahap dan terukur** (ablation), sehingga kontribusi setiap teknik terhadap `N_max` dan pemakaian sumber daya terlihat.
-3. **Inferensi terpusat + batching** lintas kamera untuk model YOLO11 milik modul.
+3. **Inferensi terpusat + batching** lintas kamera untuk model YOLO11 milik modul, melalui dua jalur:
+   - **Jalur A — Python:** PyAV/OpenCV + `InferenceServer` + TensorRT/ONNX/OpenVINO (§5.1–5.7). Jalan di semua PC.
+   - **Jalur B — NVIDIA DeepStream:** decode NVDEC + `nvstreammux` + `nvinfer` TensorRT dalam satu pipeline GStreamer (§5.8). Khusus Linux + GPU NVIDIA.
 4. Integrasi **DVR/NVR**: banyak channel dari satu perangkat, sub-stream, dan batas koneksi.
 5. **Packaging** installer Windows & Linux, termasuk cara mendistribusikan modul tim.
 6. Kesiapan operasional: watchdog, logging, *soak test*.
@@ -26,6 +30,8 @@ Sebuah konfigurasi **N kamera** dinyatakan *terlayani* bila selama 10 menit peng
 | Latensi frame→hasil p95 | ≤ 500 ms | Overlay & alert terasa real-time |
 | Frame di-*drop* oleh antrean inferensi | ≤ 5% dari frame yang dijadwalkan | Bukan drop karena stride yang disengaja |
 | Pemakaian sumber daya | CPU < 90%, VRAM < 90%, RAM stabil | Sisakan ruang untuk GUI & OS |
+
+Kriteria drop di atas berlaku untuk frame yang dibuang **antrean inferensi**. Frame yang sengaja dilewati karena FPS target (§5.4) atau kebijakan *latest-frame* tidak dihitung gagal; yang dijaga adalah FPS minimum tiap kamera dan latensi (diterapkan di `benchmark_capacity.py`).
 
 `N_max` = N terbesar yang lolos semua kriteria. Hasilnya dilaporkan **per perangkat × per modul** (baseline, TA-1, TA-2), karena biaya modul berbeda-beda.
 
@@ -89,6 +95,8 @@ Dari audit kode 2026-11-09, aplikasi saat ini:
 | Semua kamera = thread dalam **satu proses Python** | Kode modul berbasis Python bersaing di GIL |
 
 Ukur `N_max` baseline **sebelum** mengubah apa pun. Angka ini menjadi pembanding semua hasil.
+
+**Hasil (2026-11-10, pengukuran pengembangan):** `N_max` baseline = **10** kamera 720p @15 FPS. Saat gagal (12 kamera), GPU hanya ±40% dan CPU sistem ±37%, tetapi `detect_ms` naik dari 8 ke 139 ms per frame: thread-thread berebut model dan GIL, bukan GPU yang penuh.
 
 ## 5. Teknik Optimasi
 
@@ -209,6 +217,75 @@ Pilih berdasarkan pengukuran. Implementasikan B hanya bila A terbukti mentok di 
 - **Degradasi bertahap** saat beban berlebih: turunkan `target_fps` semua kamera secara merata (tidak di bawah `F_min`). Bila masih berat, kamera berprioritas `low` dijeda dan alert `overload` (Fase 7) dikirim. Jangan biarkan semua kamera lambat bersamaan.
 - **Auto-tune saat first-run:** jalankan benchmark singkat (30 s) untuk memilih backend, `max_batch`, dan rekomendasi jumlah kamera. Tampilkan "PC ini direkomendasikan untuk ±N kamera dengan modul X".
 
+### 5.8 Jalur B — Backend NVIDIA DeepStream
+
+DeepStream adalah SDK NVIDIA berbasis GStreamer untuk analitik video multi-stream. Kelebihannya: decode (NVDEC), resize, batching, dan inferensi (TensorRT) semuanya terjadi **di GPU tanpa bolak-balik ke CPU**. Jalur ini dibuat untuk menjawab pertanyaan RM-3: *seberapa jauh `N_max` naik bila tahap decode–deteksi dipindah seluruhnya ke pipeline GPU, dibanding jalur Python yang sudah dioptimasi?*
+
+#### 5.8.1 Pembagian tugas — modul rekan tidak berubah
+
+DeepStream **hanya menggantikan tahap decode + deteksi** milik host. Tracker dan analitik tetap milik modul TA-1/TA-2 dan tetap dipanggil lewat kontrak yang sama (`module.process(frame, detections, ts)`, [kontrak modul](../kontrak-modul.md)).
+
+```mermaid
+flowchart LR
+    subgraph DS["Pipeline DeepStream (satu per bobot model)"]
+        S1[nvurisrcbin cam1<br/>RTSP + NVDEC] --> MUX
+        S2[nvurisrcbin cam2] --> MUX
+        SN[nvurisrcbin camN] --> MUX
+        MUX[nvstreammux<br/>batch = N] --> INF[nvinfer<br/>YOLO11 TensorRT FP16]
+        INF --> CONV[nvvideoconvert<br/>→ RGBA, skala ≤ 1280]
+        CONV --> PROBE{{probe Python<br/>pyds: NvDsBatchMeta}}
+    end
+    PROBE -- "frame + Detections per kamera" --> W1[Worker kamera 1<br/>modul TA-1]
+    PROBE --> W2[Worker kamera 2<br/>modul TA-1]
+    PROBE --> WN[Worker kamera N]
+    W1 & W2 & WN --> HOST[Agregator · Rule engine · FrameHub · GUI<br/>tidak berubah]
+```
+
+| Tahap | Jalur A (Python) | Jalur B (DeepStream) |
+|---|---|---|
+| Ambil stream + reconnect | `RTSPSource` (PyAV) | `nvurisrcbin` (`rtsp-reconnect-interval`) |
+| Decode | CPU / `hwaccel` PyAV | NVDEC (GPU) |
+| Batching lintas kamera | `InferenceServer` (§5.1) | `nvstreammux` |
+| Deteksi YOLO11 | Ultralytics / TensorRT / ONNX / OpenVINO | `nvinfer` (TensorRT) |
+| **Tracker MOT / Re-ID** | **modul rekan** | **modul rekan** (`nvtracker` **tidak** dipakai) |
+| **Analitik, metrik, event** | **modul rekan** | **modul rekan** |
+| Penyimpanan, alert, GUI, web | host | host (sama persis) |
+
+> `nvtracker` bawaan DeepStream (NvDCF/NvDeepSORT) sengaja **tidak** dipakai, karena pemilihan dan evaluasi tracker adalah ranah TA-1 (MOT) dan TA-2 (MOT + Re-ID). Memakainya akan membuat hasil di aplikasi berbeda dari hasil penelitian rekan dan menggagalkan uji paritas.
+
+#### 5.8.2 Komponen yang dibuat — `aio_cctv/inference/deepstream/`
+
+| Berkas | Isi |
+|---|---|
+| `availability.py` | Cek saat runtime: GPU NVIDIA, `gi` + GStreamer, plugin `nvinfer`/`nvstreammux`, dan `pyds`. Bila salah satu tidak ada → aplikasi otomatis memakai Jalur A dan menampilkan alasannya di halaman Pengaturan |
+| `pipeline.py` | `DeepStreamPipeline`: membangun pipeline untuk N kamera yang memakai bobot yang sama; menambah/melepas sumber saat kamera dijalankan/dihentikan (`nvurisrcbin` dinamis, *request pad* `nvstreammux`) |
+| `probe.py` | Membaca `NvDsBatchMeta` → `sv.Detections` (xyxy, confidence, class_id) per `source_id`; menyalin frame RGBA → BGR `numpy` **hanya bila modul membutuhkan citra** (mis. crop Re-ID TA-2) |
+| `engine.py` | Ekspor bobot `.pt` rekan → ONNX → konfigurasi `nvinfer` (`config_infer_yolo11.txt`) + *custom bbox parser* YOLO11; cache engine seperti §5.2 |
+| `source.py` | `DeepStreamFrameSource`: adapter agar `PipelineWorker` menerima `(frame, detections, ts)` dari probe alih-alih memanggil `Detector` sendiri |
+
+Pengaturan baru di halaman Pengaturan → Inferensi: **Backend pipeline** = `Otomatis` / `Python (Jalur A)` / `DeepStream (Jalur B)`.
+
+#### 5.8.3 Hal teknis yang perlu diperhatikan
+
+| Topik | Catatan |
+|---|---|
+| **Versi** | PC uji memakai **RTX 5060 (Blackwell) + Ubuntu 24.04**. Pakai DeepStream versi yang sudah mendukung GPU Blackwell dan Ubuntu 24.04 (seri 8.x). **Cek ulang matriks kompatibilitas resmi** (driver, CUDA, TensorRT) sebelum memasang, dan catat versi persisnya di logbook |
+| **Python** | Binding `pyds` dirilis untuk versi Python tertentu (mengikuti Python bawaan OS, di Ubuntu 24.04 = 3.12), sedangkan `.venv` aplikasi saat ini Python 3.11. Pilihan: (a) buat venv Python 3.12 khusus Jalur B, atau (b) build `pyds` dari sumber untuk 3.11. Putuskan di awal |
+| **Instalasi** | Untuk eksperimen awal paling mudah memakai **kontainer resmi NGC** (`nvcr.io/nvidia/deepstream`), karena dependensinya sudah lengkap. Untuk aplikasi GUI final, pasang native di host supaya PyQt6 dan DeepStream ada dalam satu proses |
+| **YOLO11 di `nvinfer`** | `nvinfer` tidak mengenali format keluaran YOLO11 secara bawaan. Diperlukan *custom bbox parser* (library `.so`) + ONNX dengan keluaran yang sesuai. Gunakan implementasi komunitas yang sudah ada untuk YOLO11 sebagai titik awal, cantumkan sumbernya di buku TA |
+| **Akses frame di Python** | Frame ada di memori GPU (NVMM). Menyalin ke `numpy` memakan waktu, jadi skala dulu dengan `nvvideoconvert` dan salin hanya bila modul memerlukannya. Biaya salin ini **diukur terpisah** (`copy_ms`) |
+| **Waktu (`ts`)** | Pakai `frame_meta.ntp_timestamp` / `buf_pts`, lalu ubah ke detik monotonic, supaya `CameraContext.fps` dan dwell tetap benar (konvensi Roadmap §7.3) |
+| **Kelas & ambang** | `num-detected-classes`, `pre-cluster-threshold` (conf), dan NMS di `nvinfer` diisi dari `module.yaml` (`model.classes`, `conf`, `iou`), supaya hasilnya setara Jalur A |
+| **Lisensi** | DeepStream gratis dipakai tetapi berlisensi NVIDIA (bukan open-source). **Tidak dibundel** ke installer; pengguna memasang SDK sendiri (§8.1) |
+
+#### 5.8.4 Urutan pengerjaan
+
+1. Pasang DeepStream, lalu jalankan sampel bawaan (`deepstream-app`) dengan 4 stream dari `sim_cameras.sh` untuk memastikan GPU dan driver cocok.
+2. Jalankan YOLO11 baseline (`yolo11n.pt` → ONNX → `nvinfer`) di `deepstream-app` dan bandingkan deteksinya dengan Ultralytics pada `samples/` (IoU rata-rata > 0.95, jumlah deteksi ±2%).
+3. Skrip Python mandiri `scripts/ds_probe_demo.py`: pipeline N stream + probe yang mencetak deteksi per kamera.
+4. Integrasi ke aplikasi (`DeepStreamFrameSource`), lalu jalankan **modul baseline** di atasnya dan uji paritas terhadap Jalur A.
+5. Ukur `N_max` Jalur B dengan `benchmark_capacity.py --backend deepstream` (§7).
+
 ## 6. Integrasi DVR/NVR (RM-2)
 
 Kondisi saat ini: `configs/camera_brands.json` menulis `channel=1` / `Channels/101` secara tetap. Akibatnya, hanya channel pertama DVR yang bisa dipakai.
@@ -225,19 +302,32 @@ Uji minimal: **1 DVR fisik (≥ 4 channel)** dengan merek yang tersedia (Hikvisi
 
 ## 7. Matriks Eksperimen (Ablation)
 
-Setiap baris **menambahkan** satu teknik ke baris sebelumnya. Ukur `N_max` dan sumber daya pada N tetap (mis. N = 8).
+**Jalur A (Python).** Setiap baris **menambahkan** satu teknik ke baris sebelumnya. Ukur `N_max` dan sumber daya pada N tetap (mis. N = 8).
 
 | # | Konfigurasi | `N_max` | FPS/kamera (N=8) | Latensi p95 | CPU % | GPU % | VRAM | RAM |
 |---|---|---|---|---|---|---|---|---|
-| 0 | Baseline (§4) | | | | | | | |
-| 1 | + InferenceServer bersama (batch 1) | | | | | | | |
-| 2 | + batching dinamis (B terbaik) | | | | | | | |
-| 3 | + TensorRT FP16 / OpenVINO | | | | | | | |
-| 4 | + sub-stream | | | | | | | |
-| 5 | + HW decode | | | | | | | |
-| 6 | + FPS adaptif (target 10) | | | | | | | |
-| 7 | + render hemat | | | | | | | |
-| 8 | + multi-proses (bila dipakai) | | | | | | | |
+| 0 | Baseline (§4) | 10 | 10,6 | 226 ms | 34% | 42% | 946 MB | 2,7 GB |
+| 1 | + InferenceServer bersama (batch 1) | 10 | 11,0 | 181 ms | 26% | 39% | 336 MB | 2,3 GB |
+| 2 | + batching dinamis (B = 8) + konversi BGR malas | 16 | — (N=10: 14,8) | — (N=10: 151 ms) | 28% @N=10 | 34% @N=10 | 490 MB @N=10 | 2,5 GB @N=10 |
+| 3 | + FPS adaptif (target 10) | 16 | — | — | — | — | — | — |
+| 4 | + render hemat (tile tidak terlihat) | 20 | — | — | — | — | — | — |
+| 5 | + multi-proses (prototipe benchmark, 4 proses) | ±40 | — | — | 73% | 76% | ±500 MB/proses | — |
+| 6 | + TensorRT FP16 / OpenVINO | | | | | | | |
+| 7 | + sub-stream | | | | | | | |
+| 8 | + HW decode | | | | | | | |
+
+> Angka di atas adalah **pengukuran pengembangan** (durasi singkat, aplikasi utama ikut berjalan). Rincian lengkap dan nilai per N ada di [logbook 2026-11-10](../logbook/2026-11-10-fase-09.md) dan `docs/hasil-evaluasi/*.csv`. Urutan baris disesuaikan dengan hambatan yang ditemukan: di PC uji hambatannya CPU/GIL, sehingga TensorRT dipindah ke setelah multi-proses.
+
+**Jalur B (DeepStream, §5.8).** Diukur dengan modul, video, dan kriteria yang sama.
+
+| # | Konfigurasi | `N_max` | FPS/kamera (N=8) | Latensi p95 | CPU % | GPU % | VRAM | RAM |
+|---|---|---|---|---|---|---|---|---|
+| B1 | DeepStream: NVDEC + `nvstreammux` + `nvinfer` FP16, frame selalu disalin ke CPU | | | | | | | |
+| B2 | B1 + salin frame hanya bila modul membutuhkan | | | | | | | |
+| B3 | B2 + sub-stream | | | | | | | |
+| B4 | B3 + `interval` `nvinfer` / FPS adaptif (target 10) | | | | | | | |
+
+**Perbandingan akhir:** baris terbaik Jalur A vs baris terbaik Jalur B, per perangkat × modul. Bila hambatan utamanya ada di `module_ms` (mis. Re-ID TA-2), selisih kedua jalur akan mengecil. Hal ini **justru temuan yang perlu dilaporkan**, karena menunjukkan batas yang ditentukan modul, bukan host.
 
 Dijalankan pada **≥ 2 kelas perangkat**:
 
@@ -257,6 +347,7 @@ Dijalankan pada **≥ 2 kelas perangkat**:
 |---|---|---|---|
 | **Lite** | PyQt6 + OpenCV/PyAV + onnxruntime/OpenVINO | ± 300–500 MB | PC tanpa GPU NVIDIA |
 | **GPU** | + PyTorch CUDA / TensorRT | ± 2–3 GB | PC dengan GPU NVIDIA |
+| **GPU + DeepStream** | Varian GPU; Jalur B aktif bila DeepStream SDK terpasang di sistem | sama dengan GPU (SDK dipasang terpisah) | Linux + GPU NVIDIA |
 
 Modul yang memerlukan PyTorch saat runtime (mis. Re-ID TA-2 via boxmot) **tidak bisa** berjalan di varian Lite, kecuali rekan mengekspor Re-ID ke ONNX. Bahas ini dengan TA-2 dan dokumentasikan sebagai batasan.
 
@@ -288,6 +379,7 @@ Build rilis berjalan **24–72 jam** dengan N = `N_max` − 1 kamera (campuran k
 | Keluaran | Lokasi |
 |---|---|
 | `InferenceServer`, ekspor & auto-select backend, cache engine | `aio_cctv/inference/` |
+| Backend DeepStream (Jalur B) + panduan instalasi | `aio_cctv/inference/deepstream/`, `docs/deepstream.md` |
 | Dukungan DVR multi-channel + dialog Tambah DVR | `aio_cctv/sources/`, `configs/camera_brands.json`, `aio_cctv/gui/dialogs/` |
 | `sim_cameras.sh`, `benchmark_capacity.py` | `scripts/` |
 | Tabel ablation + grafik `N_max` per perangkat × modul | `docs/logbook/` (bahan Bab IV, RM-3) |
@@ -298,6 +390,8 @@ Build rilis berjalan **24–72 jam** dengan N = `N_max` − 1 kamera (campuran k
 
 - [ ] `N_max` baseline dan sesudah optimasi terukur pada ≥ 2 perangkat × ≥ 2 modul.
 - [ ] Peningkatan `N_max` dari setiap teknik terdokumentasi (tabel §7 lengkap).
+- [ ] Jalur B (DeepStream) berjalan dengan modul baseline + ≥ 1 modul rekan, lulus uji paritas terhadap Jalur A, dan `N_max`-nya dibandingkan dengan Jalur A terbaik.
+- [ ] Bila DeepStream tidak tersedia, aplikasi otomatis kembali ke Jalur A tanpa error.
 - [ ] Satu model per bobot walau N kamera (VRAM tidak naik linear terhadap N).
 - [ ] DVR fisik ≥ 4 channel berjalan bersamaan.
 - [ ] Build Lite berjalan di PC tanpa Python & tanpa GPU (dengan modul baseline/ONNX).
@@ -315,3 +409,8 @@ Build rilis berjalan **24–72 jam** dengan N = `N_max` − 1 kamera (campuran k
 | DVR menolak banyak koneksi bersamaan | Sub-stream default; batas koneksi per perangkat dapat diatur; relay via MediaMTX |
 | Simulator memakan CPU PC uji | Simulator di PC kedua, atau `-c copy` dari file pre-encoded |
 | Antivirus menandai executable | Nuitka / tanda tangan kode; laporkan false positive |
+| Versi DeepStream belum cocok dengan GPU RTX 50xx / Ubuntu 24.04 / driver | Cek matriks kompatibilitas dulu; uji di kontainer NGC sebelum pasang native; catat versi di logbook |
+| `pyds` tidak tersedia untuk Python 3.11 | Venv Python 3.12 khusus Jalur B, atau build `pyds` dari sumber |
+| Parser YOLO11 untuk `nvinfer` bermasalah / hasil beda dari Ultralytics | Uji deteksi vs Ultralytics di langkah §5.8.4-2 sebelum integrasi; laporkan selisih seperti FP16 |
+| Salin frame GPU→CPU menghapus keuntungan DeepStream | Ukur `copy_ms`; salin hanya bila perlu; skala frame dulu |
+| Integrasi DeepStream memakan waktu lebih lama dari rencana | Jalur A tetap jadi jalur utama yang lengkap; Jalur B minimal sampai langkah §5.8.4-3 (demo mandiri + angka kapasitas) agar tetap bisa dibandingkan |

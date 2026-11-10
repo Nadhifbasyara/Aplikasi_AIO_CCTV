@@ -19,6 +19,13 @@ from aio_cctv.storage.aggregator import Aggregator, HealthRecorder, record_alert
 from aio_cctv.zones.models import Profile
 
 
+def _p95(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    return s[min(len(s) - 1, int(0.95 * len(s)))]
+
+
 class PipelineWorker(QThread):
     frame_ready = pyqtSignal(str, QImage)          # cam_id, frame beranotasi
     stats_ready = pyqtSignal(str, dict)            # cam_id, fps/state/latensi
@@ -42,6 +49,10 @@ class PipelineWorker(QThread):
                 self.region_of_role[shape.role].add(shape.id)
         self.max_display_fps = max(1, settings.get("display_fps", 15))
         self.realtime_file = settings.get("realtime_file", True)
+        # Fase 9 §5.4: analisis tidak perlu lebih cepat dari ini (0 = ikuti FPS kamera)
+        self.target_fps = float(settings.get("target_fps", 0) or 0)
+        # Fase 9 §5.5: diisi Live View; False = tile tidak terlihat → tidak perlu anotasi/QImage
+        self.gui_visible = True
 
     def _make_source(self):
         if self.uri.startswith("rtsp://"):
@@ -83,9 +94,24 @@ class PipelineWorker(QThread):
                 self.error.emit(self.cam_id, "Tidak dapat terhubung ke kamera")
             res = None
             last_emit, n, t_fps = 0.0, 0, time.monotonic()
+            lat_window: list[float] = []           # latensi tiap frame dalam jendela 1 detik
+            render_ms = 0.0
+            is_rtsp = isinstance(src, RTSPSource)
+            interval = 1.0 / self.target_fps if self.target_fps > 0 else 0.0
+            next_due = 0.0
             while not self.isInterruptionRequested():
                 t_frame = time.monotonic()
-                f = src.read()
+                if is_rtsp and interval and t_frame < next_due:
+                    # belum jadwalnya: frame yang datang di sela ini dilewati tanpa dikonversi
+                    # maupun dideteksi (latest-frame), FPS analisis = target_fps
+                    self.msleep(max(1, int((next_due - t_frame) * 1000)))
+                    f = None
+                else:
+                    f = src.read()
+                if f is not None and interval:     # jadwal tetap; bila tertinggal, mulai lagi
+                    next_due += interval           # dari sekarang (jangan menumpuk antrean)
+                    if next_due <= t_frame:
+                        next_due = t_frame + interval
                 if f is None:
                     if src.finished and isinstance(src, FileSource):
                         break
@@ -93,15 +119,22 @@ class PipelineWorker(QThread):
                 else:
                     if pipe is None:               # dibuat di thread ini (model + resolusi aktual)
                         device = self.settings.get("device", "auto")
+                        fps = src.fps or 15
+                        if is_rtsp and self.target_fps > 0:
+                            fps = min(fps, self.target_fps)   # FPS EFEKTIF untuk modul (§5.4)
                         pipe = Pipeline(self.module.manifest, self.profile, src.resolution,
-                                        src.fps or 15, camera_id=self.cam_id,
+                                        fps, camera_id=self.cam_id,
                                         params=self.module_params,
                                         device=None if device == "auto" else device,
-                                        blur=self.settings.get("blur", False))
+                                        blur=self.settings.get("blur", False),
+                                        inference=self.settings.get("inference", "shared"),
+                                        max_batch=int(self.settings.get("max_batch", 8)),
+                                        max_wait_ms=float(self.settings.get("max_wait_ms", 5)))
                     res = pipe.step(f.image, f.ts)
                     last_ts, last_wall = f.ts, f.wall_ts
                     if isinstance(src, RTSPSource):  # ts RTSP = monotonic saat frame diterima
                         latency_ms = (time.monotonic() - f.ts) * 1e3
+                        lat_window.append(latency_ms)
                     if agg is not None:
                         agg.consume(res, f.ts, f.wall_ts)
                         for a in self.rules.evaluate(res, f.ts, self.region_of_role):
@@ -109,10 +142,15 @@ class PipelineWorker(QThread):
                                 self.storage, self.cam_id, a, f.wall_ts - (f.ts - a.ts)))
                     self.result_ready.emit(self.cam_id, res)
                     n += 1
-                    if time.monotonic() - last_emit >= 1.0 / self.max_display_fps:
+                    hub_wants = self.frames is not None and self.frames.wanted(self.cam_id)
+                    if (self.gui_visible or hub_wants) and \
+                            time.monotonic() - last_emit >= 1.0 / self.max_display_fps:
+                        t_r = time.perf_counter()
                         vis = pipe.annotate(f.image, res)
-                        self.frame_ready.emit(self.cam_id, to_qimage(vis))  # batasi repaint GUI
-                        if self.frames is not None:
+                        if self.gui_visible:       # batasi repaint GUI
+                            self.frame_ready.emit(self.cam_id, to_qimage(vis))
+                        render_ms = (time.perf_counter() - t_r) * 1e3
+                        if hub_wants:
                             self.frames.put(self.cam_id, vis, f.image,
                                             bool(self.settings.get("blur", False)))
                         last_emit = time.monotonic()
@@ -142,6 +180,7 @@ class PipelineWorker(QThread):
                         "resolution": getattr(src, "resolution", (0, 0)),
                         "detect_ms": pipe.times.detect_ms if pipe else 0.0,
                         "module_ms": pipe.times.module_ms if pipe else 0.0,
+                        "queue_ms": pipe.times.queue_ms if pipe else 0.0,
                         "module": self.module.manifest.name,
                         "tracks": len(res.tracks) if res is not None else 0,
                         "metrics": self._camera_metrics(res),
@@ -151,7 +190,15 @@ class PipelineWorker(QThread):
                         "reconnects": getattr(stream_stats, "reconnects", 0),
                         "downtime_s": getattr(stream_stats, "downtime_s", 0.0),
                         "latency_ms": latency_ms,
+                        # Fase 9 §3.1: rincian waktu per tahap untuk benchmark kapasitas
+                        "latency_p95_ms": _p95(lat_window),
+                        "decode_ms": getattr(stream_stats, "decode_ms", 0.0),
+                        "convert_ms": getattr(stream_stats, "convert_ms", 0.0),
+                        "target_fps": min(self.target_fps, getattr(src, "fps", 0) or 1e9)
+                        if is_rtsp and self.target_fps > 0 else getattr(src, "fps", 0.0),
+                        "render_ms": render_ms,
                     }
+                    lat_window = []
                     self.stats_ready.emit(self.cam_id, stats)
                     if health is not None:
                         health.add(stats, time.time())
@@ -169,6 +216,8 @@ class PipelineWorker(QThread):
             # pesan bisa memuat URL sumber; tampil di tile, kartu kamera, dan dashboard web
             self.error.emit(self.cam_id, mask(f"{type(e).__name__}: {e}"))
         finally:
+            if pipe is not None:                   # error di tengah jalan: lepas model bersama
+                pipe.release()
             if self.frames is not None:
                 self.frames.drop(self.cam_id)
             if agg is not None:                    # menit/jam yang belum lengkap tetap tersimpan

@@ -22,10 +22,16 @@ DEFAULTS = {
     "web_enabled": True,         # dashboard web lokal (Fase 8 §8)
     "web_port": 8080,
     "web_lan": False,            # False = hanya 127.0.0.1; True = LAN + wajib login
+    # Fase 9 — optimasi sumber daya (nilai bawaan dari hasil benchmark, lihat logbook Fase 9)
+    "inference": "shared",       # "shared" = InferenceServer bersama; "per_camera" = model/kamera
+    "max_batch": 8,              # frame maksimum per batch inferensi
+    "max_wait_ms": 5.0,          # tunggu maksimum mengisi batch
+    "target_fps": 10,            # FPS analisis maks per kamera RTSP; 0 = ikuti kamera
 }
 _TYPES = {"stream": str, "display_fps": int, "device": str, "language": str,
           "autostart": bool, "realtime_file": bool, "blur": bool, "retention_days": int,
-          "tray_notify": bool, "web_enabled": bool, "web_port": int, "web_lan": bool}
+          "tray_notify": bool, "web_enabled": bool, "web_port": int, "web_lan": bool,
+          "inference": str, "max_batch": int, "max_wait_ms": float, "target_fps": int}
 
 
 def to_qimage(bgr: np.ndarray) -> QImage:

@@ -42,6 +42,8 @@ class CameraConfig:
     profile_id: str = ""
     enabled: bool = True
     location: str = ""       # keterangan bebas, mis. "Indoor", "Lantai 2" (label di kartu kamera)
+    channel: int = 1         # channel DVR/NVR (Fase 9 §6); kamera tunggal selalu 1
+    device: str = ""         # id perangkat DVR/NVR induk; kosong = kamera tunggal
     # Fase 8: modul, parameter modul, dan aturan alert disimpan di Profile, bukan di sini.
 
 
@@ -74,7 +76,8 @@ def build_source_uri(cam: CameraConfig, password: str) -> str:
         return cam.file_path
     if cam.brand == "custom":
         return with_credentials(cam.url, cam.user, password)
-    return build_url(cam.brand, cam.host, cam.user, password, cam.stream, cam.port)
+    return build_url(cam.brand, cam.host, cam.user, password, cam.stream, cam.port,
+                     channel=cam.channel)
 
 
 class CameraManager(QObject):

@@ -63,30 +63,33 @@ Menghasilkan **bukti kuantitatif** untuk setiap rumusan masalah TA ini, dengan m
 1. Rekan menjalankan modulnya **di luar aplikasi** pada `samples/demo.mp4` → `expected.jsonl` (per frame: metrik & event).
 2. Host menjalankan modul yang sama melalui pipeline aplikasi dengan stride 1 dan backend `.pt`.
 3. Bandingkan: jumlah event per tipe (harus sama), nilai metrik per frame (|Δ| ≤ 1e-6), dan `track_id` per frame (harus sama untuk tracker deterministik).
-4. Ulangi untuk backend TensorRT FP16 / OpenVINO. Selisih yang muncul di sini **dilaporkan apa adanya** sebagai konsekuensi optimasi, beserta besarnya.
+4. Ulangi untuk backend TensorRT FP16 / OpenVINO dan **DeepStream (Jalur B)**. Selisih yang muncul di sini **dilaporkan apa adanya** sebagai konsekuensi optimasi, beserta besarnya.
 
 | Modul | Backend | Δ event (per tipe) | Δ metrik maks | Track ID identik? | Status |
 |---|---|---|---|---|---|
 | Baseline | PyTorch | | | | |
 | Baseline | TensorRT FP16 | | | | |
+| Baseline | DeepStream | | | | |
 | TA-1 | PyTorch | | | | |
 | TA-1 | TensorRT FP16 | | | | |
+| TA-1 | DeepStream | | | | |
 | TA-2 | PyTorch | | | | |
 | TA-2 | TensorRT FP16 | | | | |
+| TA-2 | DeepStream | | | | |
 
 ### 4.2 Kapasitas (RM-3)
 
 Ikuti Fase 9 §3.3 dan §7. Hasil akhir yang dicari:
 
-| Perangkat | Modul | `N_max` baseline | `N_max` teroptimasi | Peningkatan | Hambatan utama |
-|---|---|---|---|---|---|
-| PC RTX 5060 | Baseline | | | ×… | CPU decode / GPU / GIL / modul |
-| PC RTX 5060 | TA-1 | | | | |
-| PC RTX 5060 | TA-2 | | | | |
-| PC tanpa GPU | Baseline | | | | |
-| PC tanpa GPU | TA-1 | | | | |
+| Perangkat | Modul | `N_max` baseline | `N_max` Jalur A terbaik | `N_max` Jalur B (DeepStream) | Peningkatan | Hambatan utama |
+|---|---|---|---|---|---|---|
+| PC RTX 5060 | Baseline | | | | ×… | CPU decode / GPU / GIL / modul |
+| PC RTX 5060 | TA-1 | | | | | |
+| PC RTX 5060 | TA-2 | | | | | |
+| PC tanpa GPU | Baseline | | | — | | |
+| PC tanpa GPU | TA-1 | | | — | | |
 
-Grafik wajib: (a) FPS min per kamera vs N, (b) latensi p95 vs N, (c) VRAM vs N untuk baseline vs InferenceServer, (d) *waterfall* kontribusi tiap teknik terhadap `N_max`.
+Grafik wajib: (a) FPS min per kamera vs N, (b) latensi p95 vs N, (c) VRAM vs N untuk baseline vs InferenceServer, (d) *waterfall* kontribusi tiap teknik terhadap `N_max`, (e) **Jalur A vs Jalur B**: FPS min dan CPU% vs N pada grafik yang sama.
 
 ### 4.3 Keandalan RTSP/DVR (RM-2)
 
@@ -154,6 +157,7 @@ Untuk setiap metrik: tabel → grafik → **analisis penyebab**. Contoh: "Pada m
 - [ ] Setiap RM punya jawaban berbasis data.
 - [ ] Uji paritas lulus untuk baseline + ≥ 1 modul rekan di backend PyTorch; selisih backend lain terdokumentasi.
 - [ ] `N_max` sebelum/sesudah optimasi untuk ≥ 2 perangkat × ≥ 2 modul.
+- [ ] Perbandingan Jalur A vs Jalur B (DeepStream) di PC GPU untuk ≥ 2 modul, termasuk paritasnya.
 - [ ] Black-box 21/21 terisi; bug diperbaiki atau dicatat sebagai batasan.
 - [ ] SUS ≥ 10 responden.
 - [ ] Tag `v1.0.0` → **Milestone M5**.

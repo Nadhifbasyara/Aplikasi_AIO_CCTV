@@ -45,7 +45,7 @@ from aio_cctv.gui.workers.net_tasks import discover_cameras, run_async
 from aio_cctv.modules.registry import DEFAULT_MODULE
 from aio_cctv.sources.probe import probe
 from aio_cctv.sources.snapshot import grab_frame
-from aio_cctv.sources.url_builder import BRANDS, mask
+from aio_cctv.sources.url_builder import BRANDS, has_channels, mask
 from aio_cctv.zones.models import SourceConfig
 
 KIND_IP, KIND_FILE, KIND_WEBCAM = 0, 1, 2
@@ -273,6 +273,12 @@ class AddCameraDialog(QDialog):
             max(0, self.cbo_stream.findData(app_settings()["stream"])))
         self.ed_url = QLineEdit()
         self.ed_url.setPlaceholderText("rtsp://192.168.1.50:554/live/ch0")
+        self.spin_channel = QSpinBox()                    # DVR/NVR (Fase 9 §6)
+        self.spin_channel.setRange(1, 64)
+        self.spin_channel.setToolTip("Nomor channel di DVR/NVR. Kamera IP tunggal: biarkan 1. "
+                                     "Untuk memasang banyak channel sekaligus pakai "
+                                     "“Tambah DVR/NVR” di halaman Kamera.")
+        self.spin_channel.valueChanged.connect(self._refresh_url)
 
         for w in (self.ed_host, self.ed_user, self.ed_pass, self.ed_url):
             w.textChanged.connect(self._refresh_url)
@@ -287,6 +293,8 @@ class AddCameraDialog(QDialog):
         form.addRow("Username", self.ed_user)
         form.addRow("Password", self.ed_pass)
         form.addRow("Stream", self.cbo_stream)
+        self.row_channel_label = QLabel("Channel DVR")
+        form.addRow(self.row_channel_label, self.spin_channel)
         self.row_url_label = QLabel("URL manual")
         form.addRow(self.row_url_label, self.ed_url)
         self._on_brand_changed()
@@ -332,6 +340,9 @@ class AddCameraDialog(QDialog):
             w.setVisible(custom)
         for w in (self.ed_host, self.btn_find, self.spin_port, self.cbo_stream):
             w.setEnabled(not custom)
+        multi = has_channels(self.cbo_brand.currentData())
+        for w in (self.spin_channel, self.row_channel_label):
+            w.setVisible(multi)
         self._refresh_url()
 
     def _on_browse(self) -> None:
@@ -363,6 +374,7 @@ class AddCameraDialog(QDialog):
             user=self.ed_user.text().strip(),
             stream=self.cbo_stream.currentData(),
             url=self.ed_url.text().strip(),
+            channel=self.spin_channel.value() if has_channels(self.cbo_brand.currentData()) else 1,
         )
 
     def _uri(self) -> str:
@@ -461,6 +473,8 @@ class AddCameraDialog(QDialog):
             else cam.id
         cam.enabled = self.editing.enabled if self.editing else True
         cam.location = self.ed_location.text().strip()
+        if self.editing is not None:               # dialog ini tidak mengubah kelompok DVR
+            cam.device = self.editing.device
 
         if cam.brand not in ("file", "webcam") and self.ed_pass.text() != self._loaded_pw:
             secrets.set_password(cam.id, self.ed_pass.text())   # hanya ke keyring
@@ -507,6 +521,7 @@ class AddCameraDialog(QDialog):
             self.ed_pass.setText(self._loaded_pw)
             self.cbo_stream.setCurrentIndex(max(0, self.cbo_stream.findData(cam.stream)))
             self.ed_url.setText(cam.url)
+            self.spin_channel.setValue(cam.channel or 1)
 
     def _fit_to_screen(self) -> None:
         """Tinggi dialog maks. ±85% layar; selebihnya digulir (formulir panjang di layar kecil)."""

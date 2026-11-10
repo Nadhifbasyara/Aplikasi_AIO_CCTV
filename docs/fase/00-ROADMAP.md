@@ -25,6 +25,15 @@ Konsekuensinya bagi rencana:
 5. **Evaluasi akurasi model (mAP, MOTA/IDF1, error dwell) dikeluarkan** dari Fase 10, karena itu ranah TA-1 dan TA-2. Aplikasi ini cukup membuktikan bahwa hasil modul **di dalam aplikasi identik** dengan hasil modul saat dijalankan mandiri (*uji paritas*).
 6. Fase 6–10 lama dinomori ulang menjadi Fase 7–11.
 
+### Catatan Revisi 2026-11-10 — NVIDIA DeepStream
+
+Optimasi Fase 9 kini memakai **dua jalur backend** yang dibandingkan:
+
+- **Jalur A (Python):** PyAV/OpenCV + `InferenceServer` bersama + TensorRT/ONNX/OpenVINO. Jalan di semua PC (termasuk tanpa GPU NVIDIA dan Windows).
+- **Jalur B (NVIDIA DeepStream):** decode NVDEC, batching `nvstreammux`, dan inferensi `nvinfer` TensorRT dalam satu pipeline GPU. Khusus Linux + GPU NVIDIA.
+
+DeepStream **hanya menggantikan tahap decode + deteksi**. Tracker dan analitik tetap milik modul TA-1/TA-2 lewat kontrak yang sama, sehingga modul rekan tidak perlu diubah. Rinciannya di [FASE-09 §5.8](FASE-09-optimasi-sumber-daya-packaging.md).
+
 ---
 
 ## 1. Arah Proyek
@@ -65,7 +74,7 @@ Usulan ini menghindari frasa "Multi-Object Tracking" dan "Platform Analitik" di 
 | **6** | [**FASE-06 — Integrasi Model & Modul Analitik Tim**](FASE-06-integrasi-model-modul-tim.md) | **Kontrak modul**, loader, YOLO11 dari paket modul, refaktor pipeline, alat uji kepatuhan | ⚠️ Sisi host selesai; menunggu modul TA-1/TA-2 | **M4b** | 2–3 minggu |
 | 7 | [FASE-07 — Penyimpanan, Dashboard, Alert & Laporan](FASE-07-penyimpanan-dashboard-alert-laporan.md) | SQLite **generik** (metrik/event dari modul), dashboard dari manifest, rule engine, CSV/PDF | ⚠️ Sebagian (uji beban & crash-safety belum) | M4c | 3 minggu |
 | 8 | [FASE-08 — Profil, Preset, Import/Export & Dashboard Web Lokal](FASE-08-profil-konfigurasi-preset.md) | Profil v2 (kamera + modul + zona bertag + aturan), wizard preset, `.aioprofile`, **dashboard web di localhost** | ⚠️ Sebagian (uji 0-baris-kode dengan modul TA-1/TA-2 & uji LAN dari HP belum) | **M4** | 2–3 minggu |
-| 9 | [FASE-09 — Optimasi Sumber Daya Multi-Kamera, DVR & Packaging](FASE-09-optimasi-sumber-daya-packaging.md) | **InferenceServer + batching**, TensorRT/OpenVINO, sub-stream & HW decode, DVR multi-channel, uji kapasitas, installer | Belum | **M5** | 4 minggu |
+| 9 | [FASE-09 — Optimasi Sumber Daya Multi-Kamera, DVR & Packaging](FASE-09-optimasi-sumber-daya-packaging.md) | **InferenceServer + batching**, TensorRT/OpenVINO, sub-stream & HW decode, **backend NVIDIA DeepStream** (Jalur B), DVR multi-channel, uji kapasitas, installer | ⚠️ Sebagian (alat ukur, baseline, InferenceServer, render hemat, DVR selesai; multi-proses, TensorRT, DeepStream, packaging belum) | **M5** | 4 minggu |
 | 10 | [FASE-10 — Pengujian & Evaluasi](FASE-10-pengujian-evaluasi.md) | Kapasitas kamera/PC, ablation optimasi, keandalan RTSP/DVR, paritas modul, black-box, SUS | Belum | M5 | 3 minggu |
 | 11 | [FASE-11 — Dokumentasi & Laporan TA](FASE-11-dokumentasi-laporan-ta.md) | Buku TA, manual, panduan pembuat modul, demo, sidang | Paralel | **M6** | paralel + 3 minggu |
 
@@ -115,7 +124,7 @@ flowchart TB
             S3[File video]
         end
         SRC --> ING[FrameSource<br/>thread per kamera, auto-reconnect,<br/>sub-stream, HW decode]
-        ING --> INF[InferenceServer bersama<br/>batching lintas kamera<br/>TensorRT / ONNX / OpenVINO]
+        ING --> INF[Jalur A: InferenceServer bersama<br/>batching lintas kamera<br/>TensorRT / ONNX / OpenVINO<br/>— atau —<br/>Jalur B: NVIDIA DeepStream<br/>NVDEC + nvstreammux + nvinfer]
         INF --> MOD
         ING -. frame .-> MOD
         PROF[/Profil kamera<br/>modul + zona bertag + aturan/] -.-> MOD
@@ -152,6 +161,7 @@ Aplikasi_AIO_CCTV/
 │   ├── zones/                 # model zona/garis (Fase 1)
 │   ├── modules/               # (F6) api.py = kontrak modul, registry.py, host.py
 │   ├── inference/             # Detector YOLO11 (F6), InferenceServer, backend export (F9)
+│   │   └── deepstream/        # (F9) Jalur B: pipeline DeepStream + probe pyds
 │   ├── storage/               # (F7) SQLite generik, writer thread, agregator
 │   ├── alerts/                # (F7) rule engine generik
 │   ├── reports/               # (F7) ekspor CSV/PDF

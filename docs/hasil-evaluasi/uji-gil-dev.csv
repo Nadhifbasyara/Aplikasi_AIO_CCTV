@@ -1,0 +1,4 @@
+waktu,label,n,lolos,alasan,fps_min,fps_median,fps_target,latensi_p50_ms,latensi_p95_ms,drop_pct,cpu_pct,gpu_pct,vram_mb,vram_pct,ram_mb,proc_cpu_pct,decode_ms,detect_ms,module_ms,render_ms,pengaturan
+2026-11-10T16:52:34,uji GIL 1 proses,20,True,,8.60,8.70,10.00,138.18,321.91,41.87,34.80,31.71,488.00,5.99,2931.97,294.48,0.78,5.77,12.45,0.00,"{""target_fps"": ""10"", ""render"": ""hidden""}"
+2026-11-10T16:53:51,uji GIL 2 proses (offset 12),12,True,,9.99,9.99,10.00,81.53,194.36,33.33,43.28,51.18,490.00,6.01,2476.10,188.19,0.57,4.82,11.65,0.00,"{""target_fps"": ""10"", ""render"": ""hidden""}"
+2026-11-10T16:53:51,uji GIL 2 proses (offset 0),12,True,,9.99,9.99,10.00,73.50,193.51,33.31,43.28,51.04,524.00,6.43,2454.60,192.76,0.48,5.58,9.19,0.00,"{""target_fps"": ""10"", ""render"": ""hidden""}"

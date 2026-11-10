@@ -1,0 +1,4 @@
+waktu,label,n,lolos,alasan,fps_min,fps_median,fps_target,latensi_p50_ms,latensi_p95_ms,drop_pct,cpu_pct,gpu_pct,vram_mb,vram_pct,ram_mb,proc_cpu_pct,decode_ms,detect_ms,module_ms,render_ms,pengaturan
+2026-11-10T18:35:05,uji cepat,1,True,,10.01,10.01,10.00,73.49,75.35,33.33,3.66,2.43,336.00,4.12,1774.23,17.99,0.03,7.48,1.57,1.12,"{""render"": ""visible""}"
+2026-11-10T18:35:45,uji cepat,4,True,,10.01,10.03,10.00,51.63,88.40,33.20,9.49,8.00,382.00,4.69,2017.73,73.24,0.07,6.31,2.57,2.06,"{""render"": ""visible""}"
+2026-11-10T18:36:26,uji cepat,8,True,,9.98,10.01,10.00,64.27,105.22,33.28,13.51,10.50,510.00,6.26,2398.05,120.74,0.23,3.32,7.56,8.48,"{""render"": ""visible""}"

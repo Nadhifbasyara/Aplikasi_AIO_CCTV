@@ -276,6 +276,7 @@ class CamerasPage(QWidget):
 
     def _setup_ui(self) -> None:
         self.btn_add = _btn("Tambah Kamera", "plus", "primary")
+        self.btn_dvr = _btn("Tambah DVR/NVR", "module", tip="Satu DVR/NVR, banyak channel sekaligus")
         self.btn_edit = _btn("Ubah", "edit")
         self.btn_del = _btn("Hapus", "trash", "danger")
         self.btn_zones = _btn("Gambar zona", "brush")
@@ -284,6 +285,7 @@ class CamerasPage(QWidget):
         self.btn_export = _btn("Ekspor profil…", "export")
         self.btn_import = _btn("Impor profil…", "import")
         self.btn_add.clicked.connect(lambda: self.add_camera())
+        self.btn_dvr.clicked.connect(lambda: self.add_dvr())
         self.btn_edit.clicked.connect(lambda: self.edit_camera())
         self.btn_del.clicked.connect(lambda: self.delete_camera())
         self.btn_zones.clicked.connect(lambda: self._request_zones())
@@ -292,7 +294,7 @@ class CamerasPage(QWidget):
         self.btn_import.clicked.connect(lambda: self.import_profile())
 
         bar = QHBoxLayout()
-        for b in (self.btn_add, self.btn_edit, self.btn_del, self.btn_zones, self.btn_wizard):
+        for b in (self.btn_add, self.btn_dvr, self.btn_edit, self.btn_del, self.btn_zones, self.btn_wizard):
             bar.addWidget(b)
         bar.addStretch()
         bar.addWidget(self.btn_export)
@@ -408,6 +410,10 @@ class CamerasPage(QWidget):
         dlg = AddCameraDialog(self.manager, parent=self)
         dlg.saved.connect(self.zones_requested)    # §5.5 langkah 5: lanjut menggambar zona
         dlg.exec()
+
+    def add_dvr(self) -> None:
+        from aio_cctv.gui.dialogs.add_dvr import AddDvrDialog
+        AddDvrDialog(self.manager, parent=self).exec()
 
     def edit_camera(self, cam_id: str | None = None) -> None:
         if not (cam := self._target(cam_id)):

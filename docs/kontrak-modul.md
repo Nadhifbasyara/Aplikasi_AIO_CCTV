@@ -21,6 +21,8 @@ Dengan mengikuti kontrak ini, model YOLO11, tracker, dan analitik kalian bisa di
 
 Jadi modul **tidak** memanggil YOLO sendiri. Modul menerima hasil deteksi yang sudah jadi dari host.
 
+> Host bisa menjalankan deteksi lewat dua jalur: Python (Ultralytics/TensorRT/ONNX/OpenVINO) atau **NVIDIA DeepStream** (Linux + GPU NVIDIA). Bagi modul, keduanya sama: `process()` tetap menerima `frame` BGR `numpy` dan `sv.Detections`. Karena itu, modul **jangan** bergantung pada atribut khusus Ultralytics (mis. objek `Results`) dan jangan mengasumsikan resolusi frame tertentu. Pakai `CameraContext.frame_wh` untuk ukuran frame.
+
 ## 2. Struktur paket
 
 ```

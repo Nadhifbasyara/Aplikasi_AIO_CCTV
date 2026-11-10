@@ -1,5 +1,5 @@
 """Grid multi-kamera dengan overlay analitik (Fase 5 §4)."""
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -45,6 +45,17 @@ class LiveViewPage(QWidget):
         manager.worker_started.connect(self._on_worker_change)
         manager.worker_stopped.connect(self._on_worker_change)
         self.rebuild()
+        # Fase 9 §5.5 render hemat: worker hanya menganotasi frame untuk tile yang terlihat
+        self._vis_timer = QTimer(self, interval=500)
+        self._vis_timer.timeout.connect(self._sync_visibility)
+        self._vis_timer.start()
+
+    def _sync_visibility(self) -> None:
+        win = self.window()
+        shown = win.isVisible() and not win.isMinimized()
+        for cam_id, w in list(self.manager.workers.items()):
+            tile = self.tiles.get(cam_id)
+            w.gui_visible = bool(shown and tile is not None and tile.isVisible())
 
     # ---------------------------------------------------------------- tata letak
     def _setup_ui(self) -> None:
