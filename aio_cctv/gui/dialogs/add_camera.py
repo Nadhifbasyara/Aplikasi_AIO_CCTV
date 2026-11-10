@@ -9,11 +9,13 @@ import socket
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -22,6 +24,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -29,6 +32,7 @@ from PyQt6.QtWidgets import (
 )
 
 from aio_cctv.core import secrets
+from aio_cctv.gui import theme
 from aio_cctv.gui.camera_manager import (
     CameraConfig,
     CameraManager,
@@ -143,7 +147,7 @@ class AddCameraDialog(QDialog):
         self._testing = False
         self._loaded_pw = ""
         self.setWindowTitle("Ubah kamera" if cam else "Tambah kamera")
-        self.resize(640, 620)
+        self._fit_to_screen()
         self._setup_ui()
         if cam:
             self._load(cam)
@@ -167,15 +171,19 @@ class AddCameraDialog(QDialog):
         self.cbo_module.currentIndexChanged.connect(self._on_module_changed)
         self.params_form = ModuleParamsForm()
 
+        self.ed_location = QLineEdit()
+        self.ed_location.setPlaceholderText("opsional, mis. Indoor / Lantai 2 / Pintu depan")
+
         head = QFormLayout()
         head.addRow("Nama", self.ed_name)
+        head.addRow("Lokasi", self.ed_location)
         head.addRow("Jenis sumber", self.cbo_kind)
         head.addRow("Modul analitik", self.cbo_module)
 
         self.lbl_url = QLabel("—")
         self.lbl_url.setWordWrap(True)
         self.lbl_url.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.lbl_url.setStyleSheet("font-family:monospace; color:#555;")
+        self.lbl_url.setStyleSheet(f"font-family:monospace; color:{theme.MUTED};")
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self._page_ip())
@@ -210,11 +218,22 @@ class AddCameraDialog(QDialog):
         QVBoxLayout(params_box).addWidget(self.params_form)
         self._on_module_changed()
 
+        # isi formulir bisa digulir; tombol Simpan/Batal tetap terlihat di bawah
+        content = QWidget()
+        body = QVBoxLayout(content)
+        body.addLayout(head)
+        body.addWidget(self.stack)
+        body.addWidget(params_box)
+        body.addWidget(test_box)
+        body.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+
         lay = QVBoxLayout(self)
-        lay.addLayout(head)
-        lay.addWidget(self.stack)
-        lay.addWidget(params_box)
-        lay.addWidget(test_box, 1)
+        lay.addWidget(scroll, 1)
         lay.addWidget(self.buttons)
 
     def _manifest(self):
@@ -379,7 +398,7 @@ class AddCameraDialog(QDialog):
         self._grab(self._uri(), info)
 
     def _grab(self, uri: str, info: str) -> None:
-        self.lbl_result.setStyleSheet("color:#2E7D32;")
+        self.lbl_result.setStyleSheet(f"color:{theme.OK};")
         self.lbl_result.setText(f"{info} — mengambil snapshot…")
         run_async(grab_frame, uri, on_done=lambda img: self._on_snapshot(img, info),
                   on_failed=self._on_test_failed)
@@ -390,7 +409,7 @@ class AddCameraDialog(QDialog):
         self._testing = False
         self.btn_test.setEnabled(True)
         if img is None:
-            self.lbl_result.setStyleSheet("color:#EF6C00;")
+            self.lbl_result.setStyleSheet(f"color:{theme.WARN};")
             self.lbl_result.setText(f"{info}, tetapi snapshot gagal diambil.")
             return
         h, w = img.shape[:2]
@@ -398,7 +417,7 @@ class AddCameraDialog(QDialog):
             self.lbl_snapshot.size(), Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation)
         self.lbl_snapshot.setPixmap(pix)
-        self.lbl_result.setStyleSheet("color:#2E7D32;")
+        self.lbl_result.setStyleSheet(f"color:{theme.OK};")
         self.lbl_result.setText(f"{info} — snapshot {w}×{h} OK")
 
     def _on_test_failed(self, msg: str) -> None:
@@ -406,7 +425,7 @@ class AddCameraDialog(QDialog):
             return
         self._testing = False
         self.btn_test.setEnabled(True)
-        self.lbl_result.setStyleSheet("color:#C62828;")
+        self.lbl_result.setStyleSheet(f"color:{theme.BAD};")
         self.lbl_result.setText(friendly_error(msg))
 
     # ----------------------------------------------------------------- simpan
@@ -441,6 +460,7 @@ class AddCameraDialog(QDialog):
         cam.profile_id = self.editing.profile_id if self.editing and self.editing.profile_id \
             else cam.id
         cam.enabled = self.editing.enabled if self.editing else True
+        cam.location = self.ed_location.text().strip()
 
         if cam.brand not in ("file", "webcam") and self.ed_pass.text() != self._loaded_pw:
             secrets.set_password(cam.id, self.ed_pass.text())   # hanya ke keyring
@@ -463,6 +483,7 @@ class AddCameraDialog(QDialog):
 
     def _load(self, cam: CameraConfig) -> None:
         self.ed_name.setText(cam.name)
+        self.ed_location.setText(cam.location)
         binding = self.manager.profile(cam).module
         if self.cbo_module.findData(binding.module_id) < 0:  # modul sudah dicopot
             self.cbo_module.addItem(f"{binding.module_id} — tidak terpasang", binding.module_id)
@@ -486,6 +507,13 @@ class AddCameraDialog(QDialog):
             self.ed_pass.setText(self._loaded_pw)
             self.cbo_stream.setCurrentIndex(max(0, self.cbo_stream.findData(cam.stream)))
             self.ed_url.setText(cam.url)
+
+    def _fit_to_screen(self) -> None:
+        """Tinggi dialog maks. ±85% layar; selebihnya digulir (formulir panjang di layar kecil)."""
+        screen = (self.parent().screen() if self.parent() else None) or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        h = int(avail.height() * 0.85) if avail else 720
+        self.resize(680, min(820, h))
 
     def done(self, result: int) -> None:
         self._alive = False                        # task yang masih jalan tidak boleh menyentuh UI

@@ -2,23 +2,34 @@
 
 Klik kiri menambah titik, klik-ganda/Enter menutup poligon, Esc membatalkan.
 Titik dapat di-drag; klik kanan pada bentuk membuka menu ubah/hapus/duplikasi.
+Ctrl+Z / tombol Undo membatalkan titik terakhir atau perubahan terakhir.
 """
 import logging
 
 import numpy as np
 from PyQt6 import sip
-from PyQt6.QtCore import QPoint, QPointF, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QIcon, QImage, QPen, QPixmap, QPolygonF
+from PyQt6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QPixmap,
+    QPolygonF,
+    QShortcut,
+)
 from PyQt6.QtWidgets import (
     QColorDialog,
     QComboBox,
-    QFormLayout,
+    QFrame,
     QGraphicsEllipseItem,
     QGraphicsPolygonItem,
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
-    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -28,13 +39,15 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
-    QRadioButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from aio_cctv.core.colors import PALETTE
 from aio_cctv.core.paths import PROFILES_DIR
+from aio_cctv.gui import theme
+from aio_cctv.gui.icons import _pixmap, icon
 from aio_cctv.gui.utils import app_settings, to_qimage
 from aio_cctv.gui.widgets.polygon_item import EditableLine, EditablePolygon
 from aio_cctv.gui.workers.net_tasks import run_async
@@ -45,6 +58,21 @@ log = logging.getLogger(__name__)
 CLOSE_PX = 8                         # klik-ganda menutup poligon tanpa titik kembar
 NO_ROLE = "(tanpa peran)"
 KIND = {"zona": "zone", "garis": "line"}
+UNDO_LIMIT = 50
+
+
+def _shape_icon(kind: str, color: str, size: int = 26) -> QPixmap:
+    """Kotak berwarna (warna bentuk) berisi ikon zona/garis putih — untuk Daftar Zona."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setBrush(QColor(color))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawRoundedRect(QRectF(0, 0, size, size), 6, 6)
+    p.drawPixmap(4, 4, _pixmap("zone" if kind == "zona" else "line", "#FFFFFF", size - 8))
+    p.end()
+    return pix
 
 
 def _detect(manifest, device: str | None, image: np.ndarray):
@@ -61,12 +89,27 @@ class ZoneCanvas(QGraphicsView):
     finish_requested = pyqtSignal()
     cancel_requested = pyqtSignal()
     menu_requested = pyqtSignal(object, QPoint)
+    edit_started = pyqtSignal()          # sebelum bentuk/titik digeser (untuk Undo)
 
     def __init__(self):
         super().__init__(QGraphicsScene())
         self.drafting = False
+        self.overlay_top = None          # toolbar mengambang
+        self.overlay_chip = None         # "Sedang menggambar…"
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setStyleSheet("background:#111;")
+
+    def place_overlays(self) -> None:
+        y = 10
+        for w in (self.overlay_top, self.overlay_chip):
+            if w is not None:
+                w.adjustSize()
+                w.move((self.width() - w.width()) // 2, y)
+                y += w.height() + 6
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self.place_overlays()
 
     def shape_at(self, pos: QPoint):
         item = self.itemAt(pos)
@@ -79,6 +122,8 @@ class ZoneCanvas(QGraphicsView):
                 self.drafting or self.shape_at(e.pos()) is None):
             self.clicked.emit(self.mapToScene(e.pos()))
             return                       # jangan diteruskan: mencegah rubber-band
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.edit_started.emit()     # bentuk/titik mungkin akan digeser
         super().mousePressEvent(e)
 
     def mouseDoubleClickEvent(self, e) -> None:
@@ -131,84 +176,165 @@ class ZoneEditorPage(QWidget):
         self.canvas.menu_requested.connect(self._on_menu)
         self.scene.selectionChanged.connect(self._on_selection_changed)
 
+        self.canvas.edit_started.connect(self._push_undo)
+        self._undo: list[list[dict]] = []
+
         self.cbo_cam = QComboBox()
         self.cbo_cam.currentIndexChanged.connect(self._on_camera_changed)
-        self.btn_snapshot = QPushButton("Ambil snapshot")
+        self.btn_preview = self._button("Pratinjau Deteksi", "eye")
+        self.btn_preview.setToolTip("Jalankan detektor modul sekali pada snapshot — titik kuning "
+                                    "= jangkar kaki yang dipakai zona & garis")
+        self.btn_preview.clicked.connect(self.preview_detection)
+        self.btn_snapshot = self._button("Ambil Snapshot", "photo")
         self.btn_snapshot.clicked.connect(self.take_snapshot)
-        self.rb_zona = QRadioButton("Zona")
-        self.rb_garis = QRadioButton("Garis")
-        self.rb_zona.setChecked(True)
-        self.rb_zona.toggled.connect(
-            lambda on: self._set_mode("zona" if on else "garis"))
-        self.btn_save = QPushButton("Simpan")
-        self.btn_cancel = QPushButton("Batal")
-        self.btn_save.clicked.connect(self.save)
-        self.btn_cancel.clicked.connect(self.discard)
 
         bar = QHBoxLayout()
-        bar.addWidget(QLabel("Kamera:"))
+        bar.addWidget(QLabel("Kamera"))
         bar.addWidget(self.cbo_cam, 1)
+        bar.addSpacing(8)
+        bar.addWidget(self.btn_preview)
         bar.addWidget(self.btn_snapshot)
-        bar.addSpacing(12)
-        bar.addWidget(QLabel("Mode:"))
-        bar.addWidget(self.rb_zona)
-        bar.addWidget(self.rb_garis)
-        bar.addStretch()
-        bar.addWidget(self.btn_save)
-        bar.addWidget(self.btn_cancel)
+
+        # toolbar mengambang di atas kanvas
+        self.floatbar = QFrame(self.canvas)
+        self.floatbar.setObjectName("floatbar")
+        fb = QHBoxLayout(self.floatbar)
+        fb.setContentsMargins(6, 4, 6, 4)
+        fb.setSpacing(2)
+        self.btn_mode_zone = self._float_button("Zona", "zone", checkable=True)
+        self.btn_mode_line = self._float_button("Garis", "line", checkable=True)
+        self.btn_mode_zone.setChecked(True)
+        self.btn_mode_zone.clicked.connect(lambda: self._set_mode("zona"))
+        self.btn_mode_line.clicked.connect(lambda: self._set_mode("garis"))
+        sep = QFrame()
+        sep.setObjectName("floatSep")
+        sep.setFrameShape(QFrame.Shape.VLine)
+        self.btn_undo = self._float_button("Undo", "undo", under=True)
+        self.btn_undo.setToolTip("Batalkan titik / perubahan terakhir (Ctrl+Z)")
+        self.btn_undo.clicked.connect(self.undo)
+        self.btn_clear = self._float_button("Hapus Semua", "trash", under=True)
+        self.btn_clear.clicked.connect(self.clear_all)
+        for w in (self.btn_mode_zone, self.btn_mode_line, sep, self.btn_undo, self.btn_clear):
+            fb.addWidget(w)
+        self.chip = QLabel("Sedang menggambar…", self.canvas)
+        self.chip.setObjectName("chip")
+        self.chip.hide()
+        self.canvas.overlay_top, self.canvas.overlay_chip = self.floatbar, self.chip
+        QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo)
 
         left = QVBoxLayout()
         left.addLayout(bar)
         left.addWidget(self.canvas, 1)
         self.lbl_hint = QLabel()
-        self.lbl_hint.setStyleSheet("color:#888;")
+        self.lbl_hint.setStyleSheet(f"color:{theme.MUTED};")
         left.addWidget(self.lbl_hint)
         left_w = QWidget()
         left_w.setLayout(left)
         main_layout.addWidget(left_w, 3)
 
-        main_layout.addLayout(self._side_panel(), 1)
+        side = QWidget()
+        side.setFixedWidth(320)
+        side.setLayout(self._side_panel())
+        main_layout.addWidget(side)
         self._update_hint()
         self._sync_properties()
 
+    @staticmethod
+    def _button(text: str, ico: str) -> QPushButton:
+        b = QPushButton(icon(ico, theme.TEXT), f" {text}")
+        b.setIconSize(QSize(16, 16))
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        return b
+
+    @staticmethod
+    def _float_button(text: str, ico: str, checkable: bool = False,
+                      under: bool = False) -> QToolButton:
+        b = QToolButton()
+        b.setText(text)
+        b.setIcon(icon(ico, theme.TEXT))
+        b.setIconSize(QSize(18, 18) if not under else QSize(16, 16))
+        b.setCheckable(checkable)
+        b.setAutoExclusive(checkable)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon if under
+                             else Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        return b
+
     def _side_panel(self) -> QVBoxLayout:
         self.lbl_title = QLabel("Properti Zona")
-        self.lbl_title.setStyleSheet("font-weight:bold;")
-        self.lst = QListWidget()
-        self.lst.currentRowChanged.connect(self._on_row_changed)
+        self.lbl_title.setObjectName("pageTitle")
 
+        # kartu Daftar Zona
+        self.lst = QListWidget()
+        self.lst.setObjectName("zoneList")
+        self.lst.currentRowChanged.connect(self._on_row_changed)
+        list_card = QFrame()
+        list_card.setObjectName("card")
+        lc = QVBoxLayout(list_card)
+        head = QLabel("Daftar Zona")
+        head.setObjectName("sectionTitle")
+        lc.addWidget(head)
+        lc.addWidget(self.lst, 1)
+
+        # kartu Properti
         self.ed_name = QLineEdit()
         self.ed_name.editingFinished.connect(self._apply_name)
         self.cbo_role = QComboBox()
         self.cbo_role.setToolTip("Peran area menurut modul analitik kamera ini "
                                  "(mis. meja_kerja, kasir). Dibaca modul lewat Region.role.")
         self.cbo_role.currentIndexChanged.connect(self._apply_role)
-        self.btn_color = QPushButton("Pilih warna")
+        self.btn_color = QPushButton()                    # contoh warna (swatch)
+        self.btn_color.setMinimumHeight(26)
+        self.btn_color.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_color.clicked.connect(self._apply_color)
-        self.btn_flip = QPushButton("Balik arah")
+        self.btn_color_edit = QToolButton()
+        self.btn_color_edit.setObjectName("rowBtn")
+        self.btn_color_edit.setIcon(icon("edit", theme.TEXT))
+        self.btn_color_edit.setToolTip("Pilih warna")
+        self.btn_color_edit.clicked.connect(self._apply_color)
+        self.btn_flip = self._button("Balik arah IN", "flip")
+        self.btn_flip.setToolTip("Tukar sisi masuk/keluar garis")
         self.btn_flip.clicked.connect(self._flip_line)
-        self.btn_delete = QPushButton("Hapus bentuk")
-        self.btn_delete.clicked.connect(lambda: self._delete(self._current()))
+        self.btn_save = self._button("Simpan", "export")
+        self.btn_save.setIcon(QIcon())
+        self.btn_save.setText("Simpan")
+        self.btn_save.setObjectName("success")
+        self.btn_save.clicked.connect(self.save)
+        self.btn_cancel = QPushButton("Batal")
+        self.btn_cancel.setObjectName("danger")
+        self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_cancel.clicked.connect(self.discard)
 
-        props = QGroupBox("Properti")
-        form = QFormLayout(props)
-        form.addRow("Nama", self.ed_name)
-        form.addRow("Peran", self.cbo_role)
-        form.addRow("Warna", self.btn_color)
-        form.addRow("", self.btn_flip)
-        form.addRow("", self.btn_delete)
+        props = QFrame()
+        props.setObjectName("card")
+        pl = QVBoxLayout(props)
+        ph = QLabel("Properti")
+        ph.setObjectName("sectionTitle")
+        pl.addWidget(ph)
+        for label, w in (("Nama", self.ed_name), ("Peran", self.cbo_role)):
+            pl.addWidget(QLabel(label))
+            pl.addWidget(w)
+        pl.addWidget(QLabel("Warna"))
+        color_row = QHBoxLayout()
+        color_row.addWidget(self.btn_color, 1)
+        color_row.addWidget(self.btn_color_edit)
+        pl.addLayout(color_row)
+        pl.addWidget(self.btn_flip)
+        pl.addSpacing(6)
+        actions = QHBoxLayout()
+        actions.addWidget(self.btn_save, 1)
+        actions.addWidget(self.btn_cancel, 1)
+        pl.addLayout(actions)
 
-        self.btn_preview = QPushButton("Pratinjau Deteksi")
-        self.btn_preview.clicked.connect(self.preview_detection)
         self.lbl_status = QLabel("Pilih kamera untuk mulai.")
         self.lbl_status.setWordWrap(True)
+        self.lbl_status.setStyleSheet(f"color:{theme.MUTED};")
 
         panel = QVBoxLayout()
+        panel.setContentsMargins(4, 0, 0, 0)
         panel.addWidget(self.lbl_title)
-        panel.addWidget(QLabel("Daftar"))
-        panel.addWidget(self.lst, 1)
+        panel.addWidget(list_card, 1)
         panel.addWidget(props)
-        panel.addWidget(self.btn_preview)
         panel.addWidget(self.lbl_status)
         return panel
 
@@ -374,6 +500,7 @@ class ZoneEditorPage(QWidget):
             shape.role = ln.role
             self._add_shape(shape)
         self.dirty = False
+        self._undo.clear()
         self._refresh_list()
 
     def _add_shape(self, shape) -> None:
@@ -390,8 +517,8 @@ class ZoneEditorPage(QWidget):
 
     def _update_hint(self) -> None:
         if self.mode == "zona":
-            self.lbl_hint.setText("Mode ZONA — klik kiri menambah titik, "
-                                  "klik-ganda atau Enter menutup poligon, Esc membatalkan.")
+            self.lbl_hint.setText("Mode ZONA — klik kiri menambah titik, klik-ganda atau Enter "
+                                  "menutup poligon, Esc membatalkan, Ctrl+Z undo.")
         else:
             self.lbl_hint.setText("Mode GARIS — klik dua titik; panah menunjuk arah IN. "
                                   "Esc membatalkan.")
@@ -424,11 +551,17 @@ class ZoneEditorPage(QWidget):
             dot.setZValue(6)
             self.scene.addItem(dot)
             self.draft_items.append(dot)
+        self._show_chip()
 
     def _cancel_draft(self) -> None:
         self.draft.clear()
         self.canvas.drafting = False
         self._redraw_draft()
+
+    def _show_chip(self) -> None:
+        if hasattr(self, "chip"):
+            self.chip.setVisible(bool(self.draft))
+            self.canvas.place_overlays()
 
     def _next_id(self, prefix: str) -> str:
         taken = {s.shape_id for s in self.shapes}
@@ -468,6 +601,7 @@ class ZoneEditorPage(QWidget):
             shape = EditableLine(self._next_id("l"), pts[0], pts[1], color,
                                  self._next_name("Garis"))
         self._cancel_draft()
+        self._push_undo()
         self._add_shape(shape)
         self.dirty = True
         self._refresh_list()
@@ -479,14 +613,109 @@ class ZoneEditorPage(QWidget):
         self.lst.blockSignals(True)
         self.lst.clear()
         for s in self._live_shapes():
-            pix = QPixmap(12, 12)
-            pix.fill(QColor(s.color))
-            label = f"{s.name}  ·  {s.role or s.kind}"
-            self.lst.addItem(QListWidgetItem(QIcon(pix), label))
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 42))
+            self.lst.addItem(item)
+            self.lst.setItemWidget(item, self._shape_row(s))
         if current in self.shapes:
             self.lst.setCurrentRow(self.shapes.index(current))
         self.lst.blockSignals(False)
         self._sync_properties()
+
+    def _shape_row(self, s) -> QWidget:
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(8, 2, 4, 2)
+        ico = QLabel()
+        ico.setPixmap(_shape_icon(s.kind, s.color))
+        name = QLabel(s.name)
+        name.setToolTip(f"{s.name} · {'zona' if s.kind == 'zona' else 'garis'}"
+                        f"{' · peran ' + s.role if s.role else ''}")
+        eye = QToolButton()
+        eye.setObjectName("rowBtn")
+        eye.setIcon(icon("eye" if s.isVisible() else "eye_off", theme.MUTED))
+        eye.setToolTip("Sembunyikan / tampilkan di kanvas (tetap tersimpan)")
+        eye.clicked.connect(lambda: self._toggle_visible(s))
+        trash = QToolButton()
+        trash.setObjectName("rowBtn")
+        trash.setIcon(icon("trash", theme.MUTED))
+        trash.setToolTip("Hapus bentuk")
+        trash.clicked.connect(lambda: self._delete(s))
+        lay.addWidget(ico)
+        lay.addWidget(name, 1)
+        lay.addWidget(eye)
+        lay.addWidget(trash)
+        return row
+
+    def _toggle_visible(self, s) -> None:
+        s.setVisible(not s.isVisible())
+        if not s.isVisible():
+            s.setSelected(False)
+        self._refresh_list()
+
+    # ------------------------------------------------------------- undo
+    def _snapshot(self) -> list[dict]:
+        out = []
+        for s in self._live_shapes():
+            if s.kind == "zona":
+                pts = [(p.x(), p.y()) for p in s.scene_points()]
+            else:
+                ln = s.line()
+                pts = [(q.x(), q.y()) for q in (s.mapToScene(ln.p1()), s.mapToScene(ln.p2()))]
+            out.append({"kind": s.kind, "id": s.shape_id, "name": s.name, "color": s.color,
+                        "role": s.role, "ztype": getattr(s, "ztype", "dwell"),
+                        "pts": [(round(x, 1), round(y, 1)) for x, y in pts],
+                        "visible": s.isVisible()})
+        return out
+
+    def _push_undo(self) -> None:
+        state = self._snapshot()
+        if not self._undo or self._undo[-1] != state:
+            self._undo.append(state)
+            del self._undo[:-UNDO_LIMIT]
+
+    def undo(self) -> None:
+        if self.draft:                               # sedang menggambar: buang titik terakhir
+            self.draft.pop()
+            self.canvas.drafting = bool(self.draft)
+            self._redraw_draft()
+            return
+        current = self._snapshot()
+        while self._undo and self._undo[-1] == current:
+            self._undo.pop()                         # penanda "sebelum geser" yang tak jadi
+        if not self._undo:
+            self.lbl_status.setText("Tidak ada yang bisa di-undo.")
+            return
+        self._restore(self._undo.pop())
+        self.dirty = True
+        self.lbl_status.setText("Perubahan terakhir dibatalkan.")
+
+    def _restore(self, state: list[dict]) -> None:
+        for s in self._live_shapes():
+            self.scene.removeItem(s)
+        self.shapes.clear()
+        for d in state:
+            pts = [QPointF(x, y) for x, y in d["pts"]]
+            if d["kind"] == "zona":
+                shape = EditablePolygon(d["id"], pts, d["color"], d["name"], d["ztype"])
+            else:
+                shape = EditableLine(d["id"], pts[0], pts[1], d["color"], d["name"])
+            shape.role = d["role"]
+            self._add_shape(shape)
+            shape.setVisible(d["visible"])
+        self._refresh_list()
+
+    def clear_all(self) -> None:
+        if not self.shapes or QMessageBox.question(
+                self, "Hapus semua", "Hapus semua zona & garis kamera ini? (bisa di-undo; "
+                "belum tersimpan sampai Simpan ditekan)") != QMessageBox.StandardButton.Yes:
+            return
+        self._push_undo()
+        for s in self._live_shapes():
+            self.scene.removeItem(s)
+        self.shapes.clear()
+        self.dirty = True
+        self._refresh_list()
 
     def _live_shapes(self) -> list:
         """Saat aplikasi ditutup, scene membongkar item-nya sementara sinyal
@@ -521,9 +750,12 @@ class ZoneEditorPage(QWidget):
 
     def _sync_properties(self) -> None:
         cur = self._current()
-        for w in (self.ed_name, self.btn_color, self.btn_delete):
+        for w in (self.ed_name, self.btn_color, self.btn_color_edit):
             w.setEnabled(cur is not None)
-        self.btn_flip.setEnabled(cur is not None and cur.kind == "garis")
+        self.btn_flip.setVisible(cur is not None and cur.kind == "garis")
+        self.btn_color.setStyleSheet(
+            f"background:{cur.color}; border:1px solid {theme.BORDER_STRONG}; border-radius:4px;"
+            if cur is not None else "")
         self.ed_name.blockSignals(True)
         self.cbo_role.blockSignals(True)
         self.ed_name.setText(cur.name if cur else "")
@@ -543,7 +775,8 @@ class ZoneEditorPage(QWidget):
         name = self.ed_name.text().strip()
         if cur is None or not name or name == cur.name:
             return
-        cur.name = name
+        self._push_undo()
+        cur.set_name(name)
         self.dirty = True
         self._refresh_list()
 
@@ -552,6 +785,7 @@ class ZoneEditorPage(QWidget):
         if role is ...:
             role = self.cbo_role.currentData()
         if cur is not None and role != cur.role:
+            self._push_undo()
             cur.role = role
             self.dirty = True
             self._refresh_list()
@@ -562,6 +796,7 @@ class ZoneEditorPage(QWidget):
             return
         color = QColorDialog.getColor(QColor(cur.color), self, "Warna bentuk")
         if color.isValid():
+            self._push_undo()
             cur.set_color(color.name())
             self.dirty = True
             self._refresh_list()
@@ -569,12 +804,14 @@ class ZoneEditorPage(QWidget):
     def _flip_line(self) -> None:
         cur = self._current()
         if cur is not None and cur.kind == "garis":
+            self._push_undo()
             cur.flip()
             self.dirty = True
 
     def _delete(self, shape) -> None:
         if shape is None:
             return
+        self._push_undo()
         self.scene.removeItem(shape)
         self.shapes.remove(shape)
         self.dirty = True
@@ -595,6 +832,7 @@ class ZoneEditorPage(QWidget):
                                shape.mapToScene(ln.p2()) + off, shape.color,
                                self._copy_name(shape.name))
             new.role = shape.role
+        self._push_undo()
         self._add_shape(new)
         self.dirty = True
         self._refresh_list()
@@ -622,7 +860,8 @@ class ZoneEditorPage(QWidget):
     def _rename(self, shape) -> None:
         name, ok = QInputDialog.getText(self, "Ubah nama", "Nama baru:", text=shape.name)
         if ok and name.strip():
-            shape.name = name.strip()
+            self._push_undo()
+            shape.set_name(name.strip())
             self.dirty = True
             self._refresh_list()
 

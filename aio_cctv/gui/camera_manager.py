@@ -41,6 +41,7 @@ class CameraConfig:
     url: str = ""            # hanya untuk brand "custom": URL RTSP lengkap tanpa kredensial
     profile_id: str = ""
     enabled: bool = True
+    location: str = ""       # keterangan bebas, mis. "Indoor", "Lantai 2" (label di kartu kamera)
     # Fase 8: modul, parameter modul, dan aturan alert disimpan di Profile, bukan di sini.
 
 

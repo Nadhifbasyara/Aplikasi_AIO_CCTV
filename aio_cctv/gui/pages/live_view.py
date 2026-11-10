@@ -19,6 +19,14 @@ from aio_cctv.gui.widgets.video_tile import VideoTile
 GRIDS = {"1x1": 1, "2x2": 2, "3x3": 3}
 
 
+def _action_style(color: str, hover: str) -> str:
+    """Tombol aksi berwarna; versi redup saat nonaktif agar tetap terbaca."""
+    return (f"QPushButton {{ background:{color}; color:white; border:none; border-radius:4px;"
+            f" padding:5px 12px; font-weight:bold; }}"
+            f"QPushButton:hover {{ background:{hover}; }}"
+            f"QPushButton:disabled {{ background:#9E9E9E; color:#EEEEEE; }}")
+
+
 class LiveViewPage(QWidget):
     status_changed = pyqtSignal(str)               # baris status bawah
     online_changed = pyqtSignal(int)               # "● N kamera online"
@@ -44,8 +52,10 @@ class LiveViewPage(QWidget):
         self.cbo_grid.addItems(GRIDS)
         self.cbo_grid.setCurrentText("2x2")
         self.cbo_grid.currentTextChanged.connect(self._on_grid_changed)
-        self.btn_start_all = QPushButton("Mulai semua")
-        self.btn_stop_all = QPushButton("Hentikan semua")
+        self.btn_start_all = QPushButton("▶  Mulai semua")
+        self.btn_stop_all = QPushButton("■  Hentikan semua")
+        self.btn_start_all.setStyleSheet(_action_style("#43A047", "#2E7D32"))   # hijau
+        self.btn_stop_all.setStyleSheet(_action_style("#E53935", "#C62828"))    # merah
         self.btn_start_all.clicked.connect(self.start_all)
         self.btn_stop_all.clicked.connect(self.manager.stop_all)
         # tombol kecil menggantikan kotak "+ Tambah kamera" di grid (lebih rapi)
@@ -169,6 +179,10 @@ class LiveViewPage(QWidget):
     def _emit_status(self) -> None:
         running = [c for c in self.manager.cameras if self.manager.is_running(c)]
         self.online_changed.emit(len(running))
+        startable = [c for c in self.manager.cameras.values()
+                     if c.enabled and not self.manager.is_running(c.id)]
+        self.btn_start_all.setEnabled(bool(startable))
+        self.btn_stop_all.setEnabled(bool(running))
         parts = []
         for cam_id in running:
             name = self.manager.cameras[cam_id].name

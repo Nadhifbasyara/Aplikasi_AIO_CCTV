@@ -3,6 +3,7 @@ import sys
 from PyQt6.QtWidgets import QApplication
 
 from aio_cctv.gui.main_window import MainWindow
+from aio_cctv.gui.theme import apply_theme
 from aio_cctv.gui.utils import APP, ORG
 
 
@@ -12,6 +13,7 @@ def main() -> None:
     app.setOrganizationName(ORG)
     app.setApplicationDisplayName("AIO-CCTV Analytics")
     app.setDesktopFileName(APP)
+    apply_theme(app)
     win = MainWindow()
     win.resize(1400, 850)
     win.show()

@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from aio_cctv.gui import theme
 from aio_cctv.gui.utils import DEFAULTS, app_settings, qsettings
 
 log = logging.getLogger(__name__)
@@ -246,7 +247,7 @@ class SettingsPage(QWidget):
                 self.camera_manager.stop(cam_id)
                 self.camera_manager.start(cam_id)
             note = f" {len(running)} kamera dijalankan ulang agar pengaturan baru dipakai."
-        self.lbl_status.setStyleSheet("color:#2E7D32;")
+        self.lbl_status.setStyleSheet(f"color:{theme.OK};")
         self.lbl_status.setText(f"Pengaturan tersimpan.{note}")
         self._show_web_status()
 

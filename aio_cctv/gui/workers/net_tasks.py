@@ -5,6 +5,8 @@ from collections.abc import Callable
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 
+from aio_cctv.sources.url_builder import mask
+
 log = logging.getLogger(__name__)
 
 
@@ -25,9 +27,15 @@ class Task(QRunnable):
         try:
             result = self._fn(*self._args, **self._kwargs)
         except Exception as e:                     # termasuk modul opsional yang belum terpasang
-            self.signals.failed.emit(f"{type(e).__name__}: {e}")
+            self._emit("failed", mask(f"{type(e).__name__}: {e}"))  # URL bisa berisi password
         else:
-            self.signals.done.emit(result)
+            self._emit("done", result)
+
+    def _emit(self, name: str, value) -> None:
+        try:                                       # akses self.signals pun gagal bila sudah dihapus
+            getattr(self.signals, name).emit(value)
+        except RuntimeError:                       # aplikasi/penerima sudah ditutup: abaikan
+            log.debug("hasil tugas latar dibuang: penerima sudah tidak ada")
 
 
 def run_async(fn: Callable, *args, on_done=None, on_failed=None, **kwargs) -> Task:

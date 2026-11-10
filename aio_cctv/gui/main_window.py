@@ -1,8 +1,9 @@
 """Jendela utama: sidebar navigasi + QStackedWidget (Fase 5 §2, §4)."""
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -14,7 +15,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from aio_cctv.gui import theme
 from aio_cctv.gui.camera_manager import CameraManager
+from aio_cctv.gui.icons import nav_icon
 from aio_cctv.gui.pages.alerts import AlertsPage
 from aio_cctv.gui.pages.cameras import CamerasPage
 from aio_cctv.gui.pages.dashboard import DashboardPage
@@ -25,7 +28,8 @@ from aio_cctv.gui.pages.settings import SettingsPage
 from aio_cctv.gui.pages.zone_editor import ZoneEditorPage
 from aio_cctv.gui.utils import app_settings
 
-NAV = ["▶ Live", "Kamera", "Zona", "Modul", "Analitik", "Laporan", "Alert", "Pengaturan"]
+NAV = ["Live", "Kamera", "Zona", "Modul", "Analitik", "Laporan", "Alert", "Pengaturan"]
+NAV_ICONS = ["live", "camera", "zone", "module", "analytics", "report", "alert", "settings"]
 ALERT_PAGE = NAV.index("Alert")
 
 
@@ -43,17 +47,23 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout(central_widget)
 
         # 1. Sidebar navigasi (kiri)
-        sidebar = QVBoxLayout()
+        side = QFrame(objectName="sidebar")
+        side.setFixedWidth(170)
+        sidebar = QVBoxLayout(side)
+        sidebar.setContentsMargins(0, 10, 0, 10)
+        sidebar.setSpacing(2)
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
-        for i, name in enumerate(NAV):
-            btn = QPushButton(name)
+        for i, (name, icon) in enumerate(zip(NAV, NAV_ICONS)):
+            btn = QPushButton(nav_icon(icon, theme.MUTED, theme.STRONG), f"  {name}")
+            btn.setIconSize(QSize(18, 18))
             btn.setCheckable(True)
-            btn.setMinimumWidth(130)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
             self.nav_group.addButton(btn, i)
             sidebar.addWidget(btn)
         sidebar.addStretch()
-        main_layout.addLayout(sidebar)
+        main_layout.setContentsMargins(0, 0, 6, 0)
+        main_layout.addWidget(side)
 
         # 2. Area konten utama (kanan) — urutan harus sama dengan NAV
         self.content_area = QStackedWidget()
@@ -82,6 +92,7 @@ class MainWindow(QMainWindow):
         self.page_live.status_changed.connect(self.statusBar().showMessage)
         self.page_live.add_camera_requested.connect(self.page_cameras.add_camera)
         self.page_cameras.zones_requested.connect(self._edit_zones)
+        self.page_cameras.live_requested.connect(self._show_live)
         self.lbl_online.setText("● 0 kamera online")
 
         # 4. Alert (Fase 7): tray + jumlah belum dibaca di tombol navigasi
@@ -122,7 +133,13 @@ class MainWindow(QMainWindow):
             self.tray.showMessage("Alert AIO-CCTV", text, icon, 10_000)
 
     def _set_unread(self, n: int) -> None:
-        self.nav_group.button(ALERT_PAGE).setText(f"Alert ({n})" if n else "Alert")
+        self.nav_group.button(ALERT_PAGE).setText(f"  Alert ({n})" if n else "  Alert")
+
+    def _show_live(self, cam_id: str) -> None:
+        """Tombol "Lihat Live" di kartu kamera: buka halaman Live, jalankan kamera bila perlu."""
+        if not self.camera_manager.is_running(cam_id):
+            self.page_live.start(cam_id)
+        self._go_to(0)
 
     def _edit_zones(self, cam_id: str) -> None:
         self.page_zones.set_camera(cam_id)

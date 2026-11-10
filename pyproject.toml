@@ -28,3 +28,6 @@ line-length = 100
 
 [tool.setuptools.packages.find]
 include = ["aio_cctv*"]
+[tool.setuptools.package-data]
+# berkas non-Python yang dibaca saat runtime (skema DB, halaman web, ikon tema)
+aio_cctv = ["storage/schema.sql", "web/static/*", "gui/assets/*.svg"]

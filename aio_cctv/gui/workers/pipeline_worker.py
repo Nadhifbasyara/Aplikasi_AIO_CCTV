@@ -14,6 +14,7 @@ from aio_cctv.modules.registry import ModuleInfo
 from aio_cctv.pipeline import Pipeline
 from aio_cctv.sources.file_source import FileSource
 from aio_cctv.sources.rtsp_source import RTSPSource
+from aio_cctv.sources.url_builder import mask
 from aio_cctv.storage.aggregator import Aggregator, HealthRecorder, record_alert
 from aio_cctv.zones.models import Profile
 
@@ -163,9 +164,10 @@ class PipelineWorker(QThread):
                 self.result_ready.emit(self.cam_id, ModuleResult(sv.Detections.empty(),
                                                                  events=closing))
         except ModuleError as e:                   # hanya kamera ini yang berhenti
-            self.error.emit(self.cam_id, f"Modul error — {e}")
+            self.error.emit(self.cam_id, mask(f"Modul error — {e}"))
         except Exception as e:                     # jangan biarkan thread mati diam-diam
-            self.error.emit(self.cam_id, f"{type(e).__name__}: {e}")
+            # pesan bisa memuat URL sumber; tampil di tile, kartu kamera, dan dashboard web
+            self.error.emit(self.cam_id, mask(f"{type(e).__name__}: {e}"))
         finally:
             if self.frames is not None:
                 self.frames.drop(self.cam_id)

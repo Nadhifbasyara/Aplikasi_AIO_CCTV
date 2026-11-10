@@ -3,12 +3,15 @@ dan garis hitung dengan panah arah IN."""
 import math
 
 from PyQt6.QtCore import QLineF, QPointF, Qt
-from PyQt6.QtGui import QBrush, QColor, QPen, QPolygonF
+from PyQt6.QtGui import QBrush, QColor, QFont, QPen, QPolygonF, QTransform
 from PyQt6.QtWidgets import (
+    QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsLineItem,
     QGraphicsPolygonItem,
+    QGraphicsSimpleTextItem,
+    QStyle,
 )
 
 ARROW = 18
@@ -23,7 +26,7 @@ class VertexHandle(QGraphicsEllipseItem):
         self.owner, self.index = owner, index
         self.setPos(pos)
         self.setBrush(QBrush(QColor("white")))
-        self.setPen(QPen(QColor("#202020"), 1))
+        self.setPen(QPen(QColor(getattr(owner, "color", "#202020")), 2))
         self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsMovable
                       | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.setZValue(10)
@@ -45,7 +48,38 @@ class _Shape:
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setZValue(1)
+        # label nama di kanvas: ukuran tetap di layar walau gambar diperkecil/diperbesar
+        self.label = QGraphicsSimpleTextItem(self.name, self)
+        self.label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+        self.label.setBrush(QBrush(QColor("white")))
+        font = QFont()
+        font.setPointSize(11)
+        font.setBold(True)
+        self.label.setFont(font)
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(6)
+        shadow.setOffset(0, 1)
+        shadow.setColor(QColor(0, 0, 0, 220))
+        self.label.setGraphicsEffect(shadow)
+        self.label.setZValue(3)
         self.set_color(color)
+        self._place_label()
+
+    def set_name(self, name: str) -> None:
+        self.name = name
+        self.label.setText(name)
+        self._place_label()
+
+    def _center_label_at(self, pos: QPointF, dy: float = 0.0) -> None:
+        r = self.label.boundingRect()
+        self.label.setPos(pos)                   # titik jangkar (koordinat bentuk)
+        self.label.setTransform(QTransform.fromTranslate(-r.width() / 2, -r.height() / 2 + dy))
+
+    @staticmethod
+    def _unselected(option):
+        # tanpa bingkai seleksi putus-putus bawaan Qt: bentuk terpilih ditandai titik sudutnya
+        option.state &= ~QStyle.StateFlag.State_Selected
+        return option
 
     def show_handles(self, visible: bool) -> None:
         for h in self.handles:
@@ -70,12 +104,20 @@ class EditablePolygon(QGraphicsPolygonItem, _Shape):
     def zone_id(self) -> str:
         return self.shape_id
 
+    def paint(self, painter, option, widget=None) -> None:
+        QGraphicsPolygonItem.paint(self, painter, self._unselected(option), widget)
+
     def set_color(self, color: str) -> None:
         self.color = color
         c = QColor(color)
         self.setPen(QPen(c, 2))
-        c.setAlpha(60)
+        c.setAlpha(70)
         self.setBrush(QBrush(c))
+        for h in self.handles:
+            h.setPen(QPen(QColor(color), 2))
+
+    def _place_label(self) -> None:
+        self._center_label_at(self.polygon().boundingRect().center())
 
     def attach_handles(self) -> None:
         for i, p in enumerate(self.polygon()):
@@ -85,6 +127,7 @@ class EditablePolygon(QGraphicsPolygonItem, _Shape):
         poly = self.polygon()
         poly[i] = pos
         self.setPolygon(poly)
+        self._place_label()
 
     def scene_points(self) -> list[QPointF]:
         return [self.mapToScene(p) for p in self.polygon()]
@@ -108,12 +151,23 @@ class EditableLine(QGraphicsLineItem, _Shape):
     def line_id(self) -> str:
         return self.shape_id
 
+    def paint(self, painter, option, widget=None) -> None:
+        QGraphicsLineItem.paint(self, painter, self._unselected(option), widget)
+
     def set_color(self, color: str) -> None:
         self.color = color
         c = QColor(color)
         self.setPen(QPen(c, 3))
         self.arrow.setBrush(QBrush(c))
         self.arrow.setPen(QPen(c, 1))
+        for h in self.handles:
+            h.setPen(QPen(c, 2))
+
+    def _place_label(self) -> None:
+        if not hasattr(self, "arrow"):
+            return
+        ln = self.line()                          # di samping titik tengah, sisi seberang panah
+        self._center_label_at(QPointF((ln.x1() + ln.x2()) / 2, (ln.y1() + ln.y2()) / 2), dy=-16)
 
     def attach_handles(self) -> None:
         ln = self.line()
@@ -127,6 +181,7 @@ class EditableLine(QGraphicsLineItem, _Shape):
         ln = self.line()
         self.setLine(QLineF(pos, ln.p2()) if i == 0 else QLineF(ln.p1(), pos))
         self._update_arrow()
+        self._place_label()
 
     def flip(self) -> None:
         """Tukar p1/p2 — di sv.LineZone ini membalik arti IN/OUT."""

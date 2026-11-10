@@ -3,20 +3,22 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -27,12 +29,76 @@ from PyQt6.QtWidgets import (
 )
 
 from aio_cctv.alerts.rules import DATA_TYPES, TYPE_LABELS, Rule, default_rules
+from aio_cctv.gui import theme
+from aio_cctv.gui.icons import icon
 from aio_cctv.gui.workers.net_tasks import run_async
 from aio_cctv.storage import queries as q
 
 RANGES = [("Hari ini", 1), ("7 hari", 7), ("30 hari", 30), ("90 hari", 90)]
-SEVERITY_COLOR = {"info": "#1E88E5", "warning": "#FB8C00", "critical": "#E53935"}
 ALL_ZONES = "(semua zona / tingkat kamera)"
+SEVERITY_PILL = {"info": "blue", "warning": "orange", "critical": "red"}
+SEVERITY_LABEL = {"info": "Info", "warning": "Warning", "critical": "Critical"}
+TYPE_ICON = {"camera_offline": "warning", "module_error": "x_circle", "overload": "gauge",
+             "metric_gt": "analytics", "metric_lt": "analytics", "event": "alert"}
+
+
+def _sev_fg(sev: str) -> str:
+    return theme.PILLS[SEVERITY_PILL.get(sev, "gray")][0]
+
+
+def _dot(color: str, size: int = 12) -> QIcon:
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setBrush(QColor(color))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawEllipse(1, 1, size - 2, size - 2)
+    p.end()
+    return QIcon(pix)
+
+
+def _pill(text: str, kind: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setProperty("pill", kind)
+    return lbl
+
+
+def _btn(text: str, ico: str, obj: str = "", color: str = theme.TEXT) -> QPushButton:
+    b = QPushButton(icon(ico, color), f" {text}")
+    b.setIconSize(QSize(16, 16))
+    if obj:
+        b.setObjectName(obj)
+    b.setCursor(Qt.CursorShape.PointingHandCursor)
+    return b
+
+
+def _rule_row(r: dict) -> QWidget:
+    """Isi satu kartu aturan di daftar kiri."""
+    try:
+        text = Rule.model_validate(r).describe()
+    except Exception:                              # aturan setengah jadi saat diedit
+        text = TYPE_LABELS.get(r.get("type"), r.get("type", "?"))
+    sev = r.get("severity", "warning")
+    on = r.get("enabled", True)
+    w = QWidget()
+    w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(12, 6, 10, 6)
+    lay.setSpacing(8)
+    title = QLabel(text)
+    title.setObjectName("ruleTitle")
+    if not on:
+        title.setStyleSheet(f"color:{theme.DISABLED};")
+    lay.addWidget(title, 1)
+    if not on:
+        lay.addWidget(_pill("Nonaktif", "gray"))
+    lay.addWidget(_pill(SEVERITY_LABEL.get(sev, sev), SEVERITY_PILL.get(sev, "gray")))
+    ico = QLabel()
+    ico.setPixmap(icon(TYPE_ICON.get(r.get("type"), "alert"),
+                       _sev_fg(sev) if on else theme.DISABLED).pixmap(20, 20))
+    lay.addWidget(ico)
+    return w
 
 
 class AlertHistory(QWidget):
@@ -48,8 +114,8 @@ class AlertHistory(QWidget):
             self.cbo_range.addItem(label, days)
         self.cbo_range.setCurrentIndex(1)
         self.chk_unread = QCheckBox("Hanya yang belum dibaca")
-        self.btn_ack = QPushButton("Tandai dibaca")
-        self.btn_ack_all = QPushButton("Tandai semua dibaca")
+        self.btn_ack = _btn("Tandai dibaca", "check")
+        self.btn_ack_all = _btn("Tandai semua dibaca", "check_circle", "primary", "#FFFFFF")
         for w in (self.cbo_cam, self.cbo_range):
             w.currentIndexChanged.connect(self.refresh)
         self.chk_unread.toggled.connect(self.refresh)
@@ -107,7 +173,9 @@ class AlertHistory(QWidget):
                 item = QTableWidgetItem(v)
                 item.setData(Qt.ItemDataRole.UserRole, a["id"])
                 if c == 3:
-                    item.setForeground(QColor(SEVERITY_COLOR.get(a["severity"], "#888")))
+                    item.setText(SEVERITY_LABEL.get(v, v))
+                    item.setIcon(_dot(_sev_fg(v)))
+                    item.setForeground(QColor(_sev_fg(v)))
                 if c == 5 and not a["acknowledged"]:
                     f = item.font()
                     f.setBold(True)
@@ -141,11 +209,14 @@ class RuleEditor(QWidget):
         self.cbo_cam = QComboBox()
         self.cbo_cam.currentIndexChanged.connect(self._load_camera)
         self.lst = QListWidget()
+        self.lst.setObjectName("ruleList")
+        self.lst.setSpacing(1)
         self.lst.currentRowChanged.connect(self._show_rule)
-        self.btn_add = QPushButton("Tambah aturan")
-        self.btn_del = QPushButton("Hapus")
-        self.btn_default = QPushButton("Kembalikan bawaan")
-        self.btn_save = QPushButton("Simpan aturan")
+        self.btn_add = _btn("Tambah Aturan", "plus", "primary", "#FFFFFF")
+        self.btn_del = _btn("Hapus", "trash", "danger", theme.BAD)
+        self.btn_default = _btn("Kembalikan Bawaan", "undo")
+        self.btn_save = _btn("Simpan aturan", "save", "primary", "#FFFFFF")
+        self.btn_save.setMinimumHeight(34)
         self.btn_add.clicked.connect(self._add)
         self.btn_del.clicked.connect(self._delete)
         self.btn_default.clicked.connect(self._defaults)
@@ -153,7 +224,9 @@ class RuleEditor(QWidget):
         self.lbl_status = QLabel()
         self.lbl_status.setWordWrap(True)
 
-        self.chk_enabled = QCheckBox("Aktif")
+        self.chk_enabled = QCheckBox()
+        self.chk_enabled.setObjectName("switch")
+        self.chk_enabled.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cbo_type = QComboBox()
         for t, label in TYPE_LABELS.items():
             self.cbo_type.addItem(label, t)
@@ -168,12 +241,17 @@ class RuleEditor(QWidget):
         self.spin_count.setRange(1, 10_000)
         self.spin_cooldown = self._seconds()
         self.cbo_sev = QComboBox()
-        self.cbo_sev.addItems(["info", "warning", "critical"])
-        self.ed_msg = QLineEdit()
+        for sev in ("info", "warning", "critical"):
+            self.cbo_sev.addItem(_dot(_sev_fg(sev)), SEVERITY_LABEL[sev], sev)
+        self.cbo_sev.currentIndexChanged.connect(self._color_severity)
+        self.ed_msg = QPlainTextEdit()
         self.ed_msg.setPlaceholderText("kosong = deskripsi otomatis")
+        self.ed_msg.setFixedHeight(68)
 
         self.form = QFormLayout()
-        for label, w in (("", self.chk_enabled), ("Jenis", self.cbo_type),
+        self.form.setVerticalSpacing(9)
+        self.form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        for label, w in (("Jenis", self.cbo_type),
                          ("Metrik / event", self.cbo_target), ("Peran zona", self.cbo_role),
                          ("Ambang", self.spin_thr), ("Bertahan selama", self.spin_for),
                          ("Jendela event", self.spin_window), ("Minimal kejadian", self.spin_count),
@@ -187,31 +265,49 @@ class RuleEditor(QWidget):
         for w in (self.spin_thr, self.spin_for, self.spin_window, self.spin_count,
                   self.spin_cooldown):
             w.valueChanged.connect(self._apply)
-        self.ed_msg.editingFinished.connect(self._apply)
+        self.ed_msg.textChanged.connect(self._apply)
 
+        list_card = QFrame()
+        list_card.setObjectName("card")
+        lc = QVBoxLayout(list_card)
+        lc.setContentsMargins(6, 6, 6, 6)
+        lc.addWidget(self.lst)
         left = QVBoxLayout()
-        left.addWidget(self.lst, 1)
+        left.addWidget(list_card, 1)
         btns = QHBoxLayout()
         for b in (self.btn_add, self.btn_del, self.btn_default):
-            btns.addWidget(b)
+            btns.addWidget(b, 1)
         left.addLayout(btns)
-        right = QVBoxLayout()
+
+        form_card = QFrame()
+        form_card.setObjectName("card")
+        right = QVBoxLayout(form_card)
+        right.setContentsMargins(14, 10, 14, 14)
+        head = QHBoxLayout()
+        self.lbl_rule = QLabel()
+        self.lbl_rule.setObjectName("sectionTitle")
+        head.addWidget(self.lbl_rule, 1)
+        head.addWidget(QLabel("Aktif"))
+        head.addWidget(self.chk_enabled)
+        right.addLayout(head)
+        right.addSpacing(4)
         right.addLayout(self.form)
         right.addStretch()
         right.addWidget(self.btn_save)
         right.addWidget(self.lbl_status)
 
         body = QHBoxLayout()
+        body.setSpacing(12)
         body.addLayout(left, 1)
-        body.addLayout(right, 1)
+        body.addWidget(form_card, 1)
         top = QHBoxLayout()
-        top.addWidget(QLabel("Kamera:"))
+        top.addWidget(QLabel("Kamera"))
         top.addWidget(self.cbo_cam, 1)
         hint = QLabel("Aturan metrik/event dievaluasi tiap frame di thread kamera; aturan kamera "
                       "offline/modul error/FPS dievaluasi aplikasi tiap 5 detik. Perubahan berlaku "
                       "setelah disimpan (kamera yang berjalan dijalankan ulang).")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#888;")
+        hint.setStyleSheet(f"color:{theme.MUTED};")
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(hint)
@@ -255,11 +351,10 @@ class RuleEditor(QWidget):
         self.lst.blockSignals(True)
         self.lst.clear()
         for r in self.rules:
-            try:
-                text = Rule.model_validate(r).describe()
-            except Exception:                      # aturan setengah jadi saat diedit
-                text = r.get("type", "?")
-            self.lst.addItem(("" if r.get("enabled", True) else "[nonaktif] ") + text)
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 50))
+            self.lst.addItem(item)
+            self.lst.setItemWidget(item, _rule_row(r))
         self.lst.blockSignals(False)
         self.lst.setCurrentRow(min(max(row, 0), len(self.rules) - 1))
         self._show_rule(self.lst.currentRow())
@@ -286,7 +381,10 @@ class RuleEditor(QWidget):
         has = 0 <= i < len(self.rules)
         for k in range(self.form.rowCount()):
             self.form.itemAt(k, QFormLayout.ItemRole.FieldRole).widget().setEnabled(has)
+        self.chk_enabled.setEnabled(has)
         self.btn_del.setEnabled(has)
+        self.lbl_rule.setText(f"Ubah Aturan <span style='color:{theme.MUTED};font-weight:normal'>"
+                              f"· id {self.rules[i]['id']}</span>" if has else "Tidak ada aturan")
         if not has:
             return
         r = Rule.model_validate({**self.rules[i]})
@@ -300,8 +398,9 @@ class RuleEditor(QWidget):
         self.spin_window.setValue(r.window_s)
         self.spin_count.setValue(r.min_count)
         self.spin_cooldown.setValue(r.cooldown_s)
-        self.cbo_sev.setCurrentText(r.severity)
-        self.ed_msg.setText(r.message)
+        self.cbo_sev.setCurrentIndex(max(0, self.cbo_sev.findData(r.severity)))
+        self._color_severity()
+        self.ed_msg.setPlainText(r.message)
         self._binding = False
         self._sync_visibility(r.type)
 
@@ -331,16 +430,15 @@ class RuleEditor(QWidget):
             else None,
             "for_s": self.spin_for.value(), "window_s": self.spin_window.value(),
             "min_count": self.spin_count.value(), "cooldown_s": self.spin_cooldown.value(),
-            "severity": self.cbo_sev.currentText(), "message": self.ed_msg.text().strip(),
+            "severity": self.cbo_sev.currentData(), "message": self.ed_msg.toPlainText().strip(),
         }
         self.dirty = True
         self._sync_visibility(rtype)
-        item = self.lst.item(i)
-        try:
-            item.setText(("" if self.rules[i]["enabled"] else "[nonaktif] ")
-                         + Rule.model_validate(self.rules[i]).describe())
-        except Exception:
-            item.setText(rtype)
+        self.lst.setItemWidget(self.lst.item(i), _rule_row(self.rules[i]))
+
+    def _color_severity(self, *_args) -> None:
+        fg = _sev_fg(self.cbo_sev.currentData() or "warning")
+        self.cbo_sev.setStyleSheet(f"QComboBox {{ color:{fg}; font-weight:bold; }}")
 
     def _add(self) -> None:
         taken = {r["id"] for r in self.rules}

@@ -2,6 +2,8 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
+from aio_cctv.gui import theme
+
 STATE_COLOR = {"streaming": "#43A047", "file": "#1E88E5", "connecting": "#FB8C00",
                "reconnecting": "#E53935", "stopped": "#757575"}
 
@@ -78,6 +80,6 @@ class VideoTile(QWidget):
 
     def set_error(self, msg: str) -> None:
         self._paint_header("reconnecting")
-        self.footer.setStyleSheet("color:#E53935;")
+        self.footer.setStyleSheet(f"color:{theme.BAD};")
         self.footer.setText(msg)
         self.footer.setToolTip(msg)

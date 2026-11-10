@@ -3,6 +3,8 @@ import numpy as np
 from PyQt6.QtCore import QSettings
 from PyQt6.QtGui import QImage
 
+from aio_cctv.sources.url_builder import mask
+
 ORG, APP = "tugasakhir", "aio-cctv"
 
 # Nilai bawaan halaman Pengaturan (Fase 5 §5.8). Model, confidence, dan parameter analitik
@@ -65,4 +67,4 @@ def friendly_error(raw: str) -> str:
     for needle, msg in _ERRORS:
         if needle.lower() in low:
             return msg
-    return (raw or "Gagal terhubung").strip()[:200]
+    return mask((raw or "Gagal terhubung").strip())[:200]     # stderr ffprobe memuat URL

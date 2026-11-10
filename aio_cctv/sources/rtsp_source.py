@@ -129,7 +129,9 @@ class RTSPSource:
             except Exception as exc:
                 self.state = "reconnecting"
                 down_since = down_since or time.monotonic()
-                log.warning("[%s] gagal terhubung (PyAV): %s, coba lagi %.0fs", self.name, exc, backoff)
+                # pesan error PyAV memuat URL lengkap termasuk password: wajib disamarkan
+                log.warning("[%s] gagal terhubung (PyAV): %s, coba lagi %.0fs", self.name,
+                            mask(str(exc)), backoff)
                 if container is not None:
                     container.close()
                 self._stop.wait(backoff)
@@ -162,7 +164,7 @@ class RTSPSource:
                         compressed_bytes = 0
             except Exception as exc:
                 if not self._stop.is_set():
-                    log.warning("[%s] stream error (PyAV): %s", self.name, exc)
+                    log.warning("[%s] stream error (PyAV): %s", self.name, mask(str(exc)))
             finally:
                 container.close()
 

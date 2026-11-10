@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 
 from aio_cctv.alerts.rules import Rule
 from aio_cctv.core.colors import PALETTE
+from aio_cctv.gui import theme
 from aio_cctv.gui.pages.zone_editor import ZoneCanvas
 from aio_cctv.gui.utils import to_qimage
 from aio_cctv.gui.widgets.module_params import ModuleParamsForm
@@ -47,7 +48,7 @@ class ModulePage(QWizardPage):
         self.lbl_desc.setWordWrap(True)
         self.lbl_warn = QLabel()
         self.lbl_warn.setWordWrap(True)
-        self.lbl_warn.setStyleSheet("color:#E65100;")
+        self.lbl_warn.setStyleSheet(f"color:{theme.WARN};")
         form = QFormLayout(self)
         form.addRow("Kamera", QLabel(f"<b>{wiz.cam.name}</b>"))
         form.addRow("Modul", self.cbo_module)
@@ -340,7 +341,7 @@ class SummaryPage(QWizardPage):
             self.wiz.result = self.wiz.build()
         except ValueError as e:
             self.wiz.result = None
-            self.lbl.setText(f"<span style='color:#C62828'>{e}</span>")
+            self.lbl.setText(f"<span style='color:{theme.BAD}'>{e}</span>")
             return
         r, m = self.wiz.result, self.wiz.manifest
         zones = "".join(f"<li>Zona <b>{z.name}</b> (peran {z.role or '-'})</li>" for z in r.zones)
