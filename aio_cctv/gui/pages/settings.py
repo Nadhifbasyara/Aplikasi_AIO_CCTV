@@ -6,11 +6,13 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -164,16 +166,23 @@ class SettingsPage(QWidget):
         bar.addWidget(self.btn_reset)
         bar.addStretch()
 
+        # Isi di dalam area gulir: tanpa ini tinggi minimum halaman (±1000 px) ikut menjadi tinggi
+        # minimum jendela, sehingga jendela tidak bisa di-maximize di layar setinggi 1080 px.
+        content = QWidget()
+        body = QVBoxLayout(content)
+        body.setContentsMargins(0, 0, 0, 0)
+        for box in (analitik, tampilan, privasi, web, optim, umum):
+            body.addWidget(box)
+        body.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(content)
+
         lay = QVBoxLayout(self)
-        lay.addWidget(analitik)
-        lay.addWidget(tampilan)
-        lay.addWidget(privasi)
-        lay.addWidget(web)
-        lay.addWidget(optim)
-        lay.addWidget(umum)
-        lay.addLayout(bar)
+        lay.addWidget(scroll, 1)
+        lay.addLayout(bar)                       # tombol Simpan selalu terlihat
         lay.addWidget(self.lbl_status)
-        lay.addStretch()
 
     # ------------------------------------------------------------ nilai
     def load(self, values: dict | None = None) -> None:

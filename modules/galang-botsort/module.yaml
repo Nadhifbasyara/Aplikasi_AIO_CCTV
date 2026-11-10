@@ -1,0 +1,40 @@
+# Modul dari skrip run_trackebotsort.py (Galang): YOLO11m + BoT-SORT, hitung pengunjung unik
+# dan durasi tiap ID. Dibungkus ke kontrak v1 (docs/kontrak-modul.md).
+id: galang-botsort
+name: BoT-SORT Pengunjung (Galang)
+version: 0.1.0
+api_version: "1.0"
+authors: ["Galang"]
+license: "AGPL-3.0"
+entrypoint: analyzer:BotSortVisitorModule
+
+model:                                  # sama dengan model.track(...) di skrip asli
+  weights: ../../models/yolo11m.pt
+  task: detect
+  imgsz: 640
+  conf: 0.3
+  iou: 0.5
+  classes: [person]
+
+requirements:
+  - ultralytics>=8.3
+
+params:
+  lost_track_seconds: {type: float, default: 1.0, min: 0.1, max: 30, label: "Simpan track hilang (detik)"}
+  grace_s:            {type: float, default: 2.0, min: 0,   max: 60, label: "Jeda sebelum kunjungan dianggap selesai (detik)"}
+  min_visit_s:        {type: float, default: 1.0, min: 0,            label: "Durasi kunjungan minimum (detik)"}
+
+metrics:
+  - {key: people_count,     label: "Orang terlacak",   unit: "orang", agg: avg}
+  - {key: total_pengunjung, label: "Total pengunjung", unit: "orang", agg: last}
+
+events:
+  - {type: pengunjung_baru,    label: "Pengunjung baru (ID baru)", fields: {}}
+  - {type: kunjungan_selesai,  label: "Kunjungan selesai", fields: {start: float, end: float, duration_s: float}}
+
+dashboard:
+  - {type: kpi,         metric: total_pengunjung}
+  - {type: timeseries,  metric: people_count, title: "Orang terlacak"}
+  - {type: hourly,      event: pengunjung_baru, title: "Pengunjung per jam"}
+  - {type: event_stats, event: kunjungan_selesai, field: duration_s, title: "Lama kunjungan"}
+  - {type: heatmap}
