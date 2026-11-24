@@ -12,6 +12,7 @@ class Frame:
     ts: float          # detik, monoton (dipakai untuk durasi)
     wall_ts: float     # epoch detik (dipakai untuk penyimpanan, Fase 6)
     seq: int
+    detections: object = None   # sv.Detections bila deteksi sudah dikerjakan sumber (DeepStream)
 
 
 class FrameSource(Protocol):

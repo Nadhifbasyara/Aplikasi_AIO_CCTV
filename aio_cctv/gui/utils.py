@@ -27,11 +27,16 @@ DEFAULTS = {
     "max_batch": 8,              # frame maksimum per batch inferensi
     "max_wait_ms": 5.0,          # tunggu maksimum mengisi batch
     "target_fps": 10,            # FPS analisis maks per kamera RTSP; 0 = ikuti kamera
+    # Fase 9 §5.8 — Jalur B: "python" (Ultralytics) atau "deepstream" (container DeepStream)
+    "backend": "python",
+    "ds_width": 1280,            # resolusi nvstreammux = resolusi frame yang dianalisis
+    "ds_height": 720,
 }
 _TYPES = {"stream": str, "display_fps": int, "device": str, "language": str,
           "autostart": bool, "realtime_file": bool, "blur": bool, "retention_days": int,
           "tray_notify": bool, "web_enabled": bool, "web_port": int, "web_lan": bool,
-          "inference": str, "max_batch": int, "max_wait_ms": float, "target_fps": int}
+          "inference": str, "max_batch": int, "max_wait_ms": float, "target_fps": int,
+          "backend": str, "ds_width": int, "ds_height": int}
 
 
 def to_qimage(bgr: np.ndarray) -> QImage:

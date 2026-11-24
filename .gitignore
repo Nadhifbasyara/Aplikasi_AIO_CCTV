@@ -31,3 +31,8 @@ outputs/
 
 # gambar contoh bawaan Ultralytics
 /bus.jpg
+
+# hasil kompilasi parser DeepStream-Yolo bila `make` dijalankan manual di folder vendor
+# (aplikasi mengompilasinya di ~/.cache/aio-cctv/deepstream, di luar repo)
+third_party/deepstream_yolo/nvdsinfer_custom_impl_Yolo/**/*.o
+third_party/deepstream_yolo/nvdsinfer_custom_impl_Yolo/*.so

@@ -2,6 +2,8 @@
 import time
 from dataclasses import dataclass
 
+import supervision as sv
+
 from aio_cctv.annotate import Annotator
 from aio_cctv.inference.detector import Detector
 from aio_cctv.modules.api import Event, ModuleResult
@@ -30,10 +32,14 @@ class Pipeline:
                  strict: bool = False, blur: bool = False, inference: str = "per_camera",
                  max_batch: int = 8, max_wait_ms: float = 5.0):
         """inference: "per_camera" = model sendiri per kamera (Fase 6, dipakai uji paritas);
-        "shared" = InferenceServer bersama + batching lintas kamera (Fase 9 §5.1)."""
+        "shared" = InferenceServer bersama + batching lintas kamera (Fase 9 §5.1);
+        "deepstream" = deteksi sudah dikerjakan sumber (Jalur B, §5.8), tidak memuat model."""
         self.manifest = manifest
         self.shared = inference == "shared"
-        if self.shared:
+        self.external = inference == "deepstream"
+        if self.external:
+            self.detector = None
+        elif self.shared:
             from aio_cctv.inference.server import POOL
             self.detector = POOL.acquire(detector_key(manifest, device),
                                          lambda: Detector.from_manifest(manifest, device),
@@ -45,14 +51,18 @@ class Pipeline:
         self.annotator = Annotator(profile, frame_wh, manifest, blur=blur)
         self.times = StageTimes()
 
-    def step(self, image, ts) -> ModuleResult:
+    def step(self, image, ts, detections=None) -> ModuleResult:
+        """detections: hasil deteksi dari sumber (DeepStream); wajib bila inference="deepstream"."""
         t0 = time.perf_counter()
-        det = self.detector(image)
-        if self.shared:
-            self.times.detect_ms = self.detector.detect_ms
-            self.times.queue_ms = self.detector.queue_ms
+        if self.external:                     # detect_ms diisi worker dari sumber (GPU)
+            det = detections if detections is not None else sv.Detections.empty()
         else:
-            self.times.detect_ms = (time.perf_counter() - t0) * 1e3
+            det = self.detector(image)
+            if self.shared:
+                self.times.detect_ms = self.detector.detect_ms
+                self.times.queue_ms = self.detector.queue_ms
+            else:
+                self.times.detect_ms = (time.perf_counter() - t0) * 1e3
         res = self.module.process(image, det, ts)
         self.times.module_ms = self.module.module_ms
         return res

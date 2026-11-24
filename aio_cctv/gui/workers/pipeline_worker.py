@@ -1,3 +1,4 @@
+import logging
 import time
 from collections import defaultdict
 
@@ -11,12 +12,26 @@ from aio_cctv.gui.utils import to_qimage
 from aio_cctv.modules.api import ModuleResult
 from aio_cctv.modules.host import ModuleError
 from aio_cctv.modules.registry import ModuleInfo
-from aio_cctv.pipeline import Pipeline
+from aio_cctv.pipeline import Pipeline, detector_key
 from aio_cctv.sources.file_source import FileSource
 from aio_cctv.sources.rtsp_source import RTSPSource
 from aio_cctv.sources.url_builder import mask
 from aio_cctv.storage.aggregator import Aggregator, HealthRecorder, record_alert
 from aio_cctv.zones.models import Profile
+
+log = logging.getLogger(__name__)
+
+def frame_flow(cam_fps: float, proc_fps: float, target_fps: float) -> dict:
+    """Pecah frame kamera per detik menjadi: dianalisis + dilewati sengaja + hilang (beban).
+
+    Dilewati sengaja = di atas FPS target (latest-frame, Fase 9 §5.4); hilang = target yang
+    tidak tercapai. Ketiganya berjumlah 100% dari FPS kamera."""
+    if cam_fps <= 0:
+        return {"skip_pct": 0.0, "lost_pct": 0.0}
+    want = min(target_fps, cam_fps) if target_fps > 0 else cam_fps
+    skip = max(0.0, 1 - want / cam_fps) * 100
+    lost = min(100 - skip, max(0.0, want - proc_fps) / cam_fps * 100)
+    return {"skip_pct": skip, "lost_pct": lost}
 
 
 def _p95(values: list[float]) -> float:
@@ -53,11 +68,32 @@ class PipelineWorker(QThread):
         self.target_fps = float(settings.get("target_fps", 0) or 0)
         # Fase 9 §5.5: diisi Live View; False = tile tidak terlihat → tidak perlu anotasi/QImage
         self.gui_visible = True
+        self.backend_note = ""                     # alasan fallback DeepStream → Python
 
     def _make_source(self):
         if self.uri.startswith("rtsp://"):
+            if self.settings.get("backend", "python") == "deepstream":
+                try:
+                    return self._make_deepstream_source()
+                except Exception as e:  # noqa: BLE001 — Docker/image/GPU belum siap: tetap jalan
+                    self.backend_note = mask(str(e))
+                    log.warning("[%s] DeepStream tidak tersedia, memakai Python: %s",
+                                self.cam_id, self.backend_note)
+                    self.error.emit(self.cam_id, f"DeepStream tidak tersedia — memakai backend "
+                                                 f"Python. {self.backend_note}")
             return RTSPSource(self.uri, name=self.cam_id)
         return FileSource(self.uri)
+
+    def _make_deepstream_source(self):
+        """Jalur B (Fase 9 §5.8): decode + deteksi di container DeepStream bersama."""
+        from aio_cctv.inference.deepstream.service import check_environment
+        from aio_cctv.sources.deepstream_source import DeepStreamSource
+        check_environment()
+        w = int(self.settings.get("ds_width", 1280))
+        h = int(self.settings.get("ds_height", 720))
+        device = self.settings.get("device", "auto")
+        key = (*detector_key(self.module.manifest, device), w, h)
+        return DeepStreamSource(self.uri, self.cam_id, self.module.manifest, key, w, h)
 
     def _module_problem(self) -> str:
         if self.module is None:
@@ -90,13 +126,16 @@ class PipelineWorker(QThread):
             # dibuat di dalam try: FileSource membuka VideoCapture di konstruktor dan
             # bisa gagal untuk path yang salah
             src = self._make_source()
+            if hasattr(src, "cancel"):             # DeepStream: start bisa ±2 menit (engine)
+                src.cancel = self.isInterruptionRequested
             if src.start() is False:
                 self.error.emit(self.cam_id, "Tidak dapat terhubung ke kamera")
             res = None
             last_emit, n, t_fps = 0.0, 0, time.monotonic()
             lat_window: list[float] = []           # latensi tiap frame dalam jendela 1 detik
             render_ms = 0.0
-            is_rtsp = isinstance(src, RTSPSource)
+            is_ds = type(src).__name__ == "DeepStreamSource"
+            is_rtsp = isinstance(src, RTSPSource) or is_ds
             interval = 1.0 / self.target_fps if self.target_fps > 0 else 0.0
             next_due = 0.0
             while not self.isInterruptionRequested():
@@ -127,12 +166,15 @@ class PipelineWorker(QThread):
                                         params=self.module_params,
                                         device=None if device == "auto" else device,
                                         blur=self.settings.get("blur", False),
-                                        inference=self.settings.get("inference", "shared"),
+                                        inference="deepstream" if is_ds else
+                                        self.settings.get("inference", "shared"),
                                         max_batch=int(self.settings.get("max_batch", 8)),
                                         max_wait_ms=float(self.settings.get("max_wait_ms", 5)))
-                    res = pipe.step(f.image, f.ts)
+                    res = pipe.step(f.image, f.ts, f.detections)
+                    if is_ds:
+                        pipe.times.detect_ms = src.infer_ms
                     last_ts, last_wall = f.ts, f.wall_ts
-                    if isinstance(src, RTSPSource):  # ts RTSP = monotonic saat frame diterima
+                    if is_rtsp:                    # ts RTSP = monotonic saat frame diterima
                         latency_ms = (time.monotonic() - f.ts) * 1e3
                         lat_window.append(latency_ms)
                     if agg is not None:
@@ -168,16 +210,31 @@ class PipelineWorker(QThread):
                     stream_stats = getattr(src, "stats", None)
                     frames_rx = getattr(stream_stats, "frames_received", 0)
                     frames_cx = getattr(stream_stats, "frames_consumed", 0)
+                    proc_fps = n / (now - t_fps)
+                    cam_fps = getattr(stream_stats, "recv_fps", getattr(src, "fps", 0.0))
+                    flow = frame_flow(cam_fps, proc_fps,
+                                      self.target_fps if is_rtsp else 0.0)
+                    kib_s = getattr(stream_stats, "bandwidth_kbps", 0.0)
                     stats = {
                         "state": getattr(src, "state", "file"),
-                        "stream_type": "RTSP/TCP" if isinstance(src, RTSPSource) else "File",
-                        "bandwidth_kbps": getattr(stream_stats, "bandwidth_kbps", 0.0),
-                        "total_frames": frames_rx,
-                        "decoded_frames": frames_cx,
-                        "dropped_rate": getattr(stream_stats, "dropped_rate", 0.0),
-                        "proc_fps": n / (now - t_fps),
-                        "stream_fps": getattr(stream_stats, "recv_fps", getattr(src, "fps", 0.0)),
-                        "resolution": getattr(src, "resolution", (0, 0)),
+                        "stream_type": "RTSP/TCP · DeepStream" if is_ds else
+                        "RTSP/TCP" if isinstance(src, RTSPSource) else "File",
+                        "backend": "deepstream" if is_ds else "python",
+                        "backend_note": self.backend_note,
+                        "bandwidth_kbps": kib_s or 0.0,            # KiB/s (nama lama)
+                        # bitrate seperti di pengaturan kamera (kilobit/s); None = tak terukur
+                        "bitrate_kbps": None if kib_s is None else kib_s * 8 * 1.024,
+                        "codec": getattr(src, "codec", ""),
+                        "total_frames": frames_rx,             # frame dari kamera
+                        "decoded_frames": frames_cx,           # frame yang dianalisis
+                        "skip_pct": flow["skip_pct"],          # dilewati sengaja (FPS target)
+                        "lost_pct": flow["lost_pct"],          # terlewat karena beban
+                        "dropped_rate": flow["lost_pct"],      # kolom DB camera_health
+                        "proc_fps": proc_fps,
+                        "stream_fps": cam_fps,
+                        "resolution": getattr(src, "resolution", (0, 0)),   # frame dianalisis
+                        "source_resolution": getattr(src, "source_resolution", None)
+                        or getattr(src, "resolution", (0, 0)),
                         "detect_ms": pipe.times.detect_ms if pipe else 0.0,
                         "module_ms": pipe.times.module_ms if pipe else 0.0,
                         "queue_ms": pipe.times.queue_ms if pipe else 0.0,

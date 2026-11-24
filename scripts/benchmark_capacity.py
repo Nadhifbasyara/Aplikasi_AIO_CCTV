@@ -199,6 +199,8 @@ def main() -> int:
     overrides = dict(kv.split("=", 1) for kv in args.set)
     settings = {**DEFAULTS, "device": "auto", "blur": False,
                 **{k: _parse_value(v) for k, v in overrides.items()}}
+    if not args.no_sim and not Path(args.video).is_file():
+        sys.exit(f"video simulasi tidak ditemukan: {args.video} (lihat isi data/bench/)")
     module = resolve(args.module)
     if module is None or not module.valid:
         sys.exit(f"modul {args.module!r} tidak ditemukan/tidak valid")
@@ -226,7 +228,8 @@ def main() -> int:
                       flush=True)
                 r = run_n(n, args, module, profile, settings, sampler, vram_total)
                 r.update(waktu=datetime.now().isoformat(timespec="seconds"), label=args.label,
-                         pengaturan=json.dumps({**overrides, "render": args.render}))
+                         pengaturan=json.dumps({**overrides, "render": args.render,
+                                                    "video": Path(args.video).name}))
                 wr.writerow({k: (f"{v:.2f}" if isinstance(v, float) else v)
                              for k, v in r.items() if k in FIELDS})
                 fh.flush()

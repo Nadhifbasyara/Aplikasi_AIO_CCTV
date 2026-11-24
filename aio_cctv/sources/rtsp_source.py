@@ -60,6 +60,7 @@ class RTSPSource:
         self.state = "idle"
         self.stats = StreamStats()
         self.fps, self.resolution = 0.0, (0, 0)
+        self.codec = ""                    # mis. "H264"/"HEVC", seperti di pengaturan kamera
         self._latest: Frame | None = None
         self._latest_av = None             # (VideoFrame, ts, wall_ts, seq) belum dikonversi
         self._last_consumed_seq = 0
@@ -83,6 +84,10 @@ class RTSPSource:
     @property
     def finished(self) -> bool:
         return self._stop.is_set()
+
+    @property
+    def source_resolution(self) -> tuple[int, int]:
+        return self.resolution             # Jalur A menganalisis frame pada resolusi asli
 
     # ---------- konsumen ----------
     def read(self) -> Frame | None:
@@ -145,6 +150,7 @@ class RTSPSource:
                 self.fps = float(video_stream.average_rate or video_stream.rate or 15)
                 self.resolution = (video_stream.codec_context.width,
                                    video_stream.codec_context.height)
+                self.codec = (video_stream.codec_context.name or "").upper()
             except Exception as exc:
                 self.state = "reconnecting"
                 down_since = down_since or time.monotonic()

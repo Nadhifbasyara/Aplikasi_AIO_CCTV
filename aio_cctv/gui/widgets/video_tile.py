@@ -8,6 +8,41 @@ STATE_COLOR = {"streaming": "#43A047", "file": "#1E88E5", "connecting": "#FB8C00
                "reconnecting": "#E53935", "stopped": "#757575"}
 
 
+def fmt_bitrate(kbps: float | None) -> str:
+    """Satuan seperti di pengaturan kamera CCTV: Kbps / Mbps (kilobit, bukan kilobyte)."""
+    if kbps is None:
+        return "— (tidak terukur di DeepStream)"
+    return f"{kbps / 1000:.2f} Mbps" if kbps >= 1000 else f"{kbps:.0f} Kbps"
+
+
+def stats_text(s: dict) -> str:
+    """Teks statistik tile. Baris "Kamera" = apa yang dikirim kamera (sama dengan pengaturan
+    stream di web/NVR kamera); baris "Analisis" = apa yang benar-benar diproses aplikasi."""
+    sw, sh = s.get("source_resolution") or s.get("resolution", (0, 0))
+    aw, ah = s.get("resolution", (0, 0))
+    codec = f" | {s['codec']}" if s.get("codec") else ""
+    target = s.get("target_fps") or 0
+    is_file = s.get("stream_type") == "File"
+    lines = [
+        f"Stream: {s.get('stream_type', '-')}{codec}",
+        f"Kamera: {sw}x{sh} @ {s.get('stream_fps', 0.0):.1f} fps",
+    ]
+    if not is_file:
+        lines.append(f"Bitrate: {fmt_bitrate(s.get('bitrate_kbps'))}")
+    res = "" if (aw, ah) == (sw, sh) else f"{aw}x{ah} @ "
+    tgt = f" (target {target:.0f})" if target and not is_file else ""
+    lines += [
+        f"Analisis: {res}{s.get('proc_fps', 0.0):.1f} fps{tgt}",
+        f"Frame: diterima {s.get('total_frames', 0)} · dianalisis {s.get('decoded_frames', 0)}",
+        f"Dilewati: {s.get('skip_pct', 0.0):.0f}% (sengaja) · Hilang: {s.get('lost_pct', 0.0):.1f}%",
+        f"Modul: {s.get('module', '-')} | Track: {s.get('tracks', 0)}",
+        f"Detect: {s.get('detect_ms', 0.0):.0f} ms | Modul: {s.get('module_ms', 0.0):.0f} ms",
+    ]
+    for label, value in (s.get("metrics") or {}).items():   # label & satuan dari manifest
+        lines.append(f"{label}: {value}")
+    return "\n".join(lines)
+
+
 class VideoTile(QWidget):
     toggle_requested = pyqtSignal(str)             # cam_id: minta start/stop
 
@@ -61,22 +96,8 @@ class VideoTile(QWidget):
 
     def set_stats(self, s: dict) -> None:
         self._paint_header(s["state"])
-        width, height = s.get("resolution", (0, 0))
-        text = (
-            f"Stream type: {s.get('stream_type', '-')}\n"
-            f"Resolution: {width}x{height} | FPS: {s.get('stream_fps', 0.0):.1f}\n"
-            f"Bandwidth: {s.get('bandwidth_kbps', 0.0):.2f} kBps\n"
-            f"Total frame: {s.get('total_frames', 0)}\n"
-            f"Decoded frame: {s.get('decoded_frames', 0)}\n"
-            f"Dropped frame rate: {s.get('dropped_rate', 0.0):.2f}%\n"
-            f"Modul: {s.get('module', '-')} | Track: {s.get('tracks', 0)}\n"
-            f"Detect: {s['detect_ms']:.0f} ms | Modul: {s.get('module_ms', 0.0):.0f} ms"
-            f" | Process: {s['proc_fps']:.1f} fps"
-        )
-        for label, value in (s.get("metrics") or {}).items():   # label & satuan dari manifest
-            text += f"\n{label}: {value}"
         self.footer.setStyleSheet("")
-        self.footer.setText(text)
+        self.footer.setText(stats_text(s))
 
     def set_error(self, msg: str) -> None:
         self._paint_header("reconnecting")

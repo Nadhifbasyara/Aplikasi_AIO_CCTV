@@ -139,8 +139,17 @@ class SettingsPage(QWidget):
         self.spin_target.setToolTip("Analisis kamera RTSP dibatasi ke FPS ini; frame di antaranya "
                                     "dilewati sebelum deteksi. Jangan di bawah FPS minimum tracker "
                                     "modul (umumnya 8).")
+        self.cbo_backend = QComboBox()
+        self.cbo_backend.addItem("Python (Ultralytics, PyTorch)", "python")
+        self.cbo_backend.addItem("NVIDIA DeepStream (NVDEC + TensorRT FP16, Docker)", "deepstream")
+        self.cbo_backend.setToolTip(
+            "DeepStream: decode dan deteksi kamera RTSP dikerjakan GPU di container DeepStream, "
+            "dibatch bersama; tracker & analitik tetap modul rekan. Butuh Docker + image "
+            "DeepStream 9.1. Bila tidak tersedia, kamera otomatis memakai Python.")
+        self.cbo_backend.currentIndexChanged.connect(self._backend_changed)
         optim = QGroupBox("Optimasi multi-kamera")
         f6 = QFormLayout(optim)
+        f6.addRow("Backend deteksi", self.cbo_backend)
         f6.addRow("", self.chk_shared)
         f6.addRow("Ukuran batch maks", self.spin_batch)
         f6.addRow("FPS analisis maks", self.spin_target)
@@ -203,6 +212,13 @@ class SettingsPage(QWidget):
         self.chk_shared.setChecked(s["inference"] == "shared")
         self.spin_batch.setValue(s["max_batch"])
         self.spin_target.setValue(s["target_fps"])
+        self.cbo_backend.setCurrentIndex(max(0, self.cbo_backend.findData(s["backend"])))
+        self._backend_changed()
+
+    def _backend_changed(self) -> None:
+        python = self.cbo_backend.currentData() == "python"
+        self.chk_shared.setEnabled(python)         # opsi Jalur A saja
+        self.spin_batch.setEnabled(python)
 
     def values(self) -> dict:
         return {
@@ -221,6 +237,7 @@ class SettingsPage(QWidget):
             "inference": "shared" if self.chk_shared.isChecked() else "per_camera",
             "max_batch": self.spin_batch.value(),
             "target_fps": self.spin_target.value(),
+            "backend": self.cbo_backend.currentData(),
         }
 
     # ------------------------------------------------------------ dashboard web
