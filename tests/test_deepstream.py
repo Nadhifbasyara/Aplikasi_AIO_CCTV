@@ -150,13 +150,38 @@ def test_frame_flow_splits_camera_frames():
     assert frame_flow(0, 0, 10) == {"skip_pct": 0.0, "lost_pct": 0.0}
 
 
-def test_tile_stats_show_camera_values():
-    from aio_cctv.gui.widgets.video_tile import fmt_bitrate, stats_text
+def test_tile_shows_camera_summary_warnings_and_details():
+    from aio_cctv.gui.widgets.video_tile import (
+        detail_sections,
+        fmt_bitrate,
+        summary_lines,
+        warnings,
+    )
     assert fmt_bitrate(2048) == "2.05 Mbps" and fmt_bitrate(512) == "512 Kbps"
     assert "tidak terukur" in fmt_bitrate(None)
-    text = stats_text({"stream_type": "RTSP/TCP · DeepStream", "source_resolution": (2560, 1440),
-                       "resolution": (1280, 720), "stream_fps": 25.0, "bitrate_kbps": None,
-                       "proc_fps": 10.0, "target_fps": 10, "skip_pct": 60.0, "lost_pct": 0.0})
-    assert "Kamera: 2560x1440 @ 25.0 fps" in text          # resolusi asli, bukan mux
-    assert "Analisis: 1280x720 @ 10.0 fps (target 10)" in text
-    assert "Dilewati: 60% (sengaja) · Hilang: 0.0%" in text
+    s = {"stream_type": "RTSP/TCP", "state": "streaming", "source_resolution": (1920, 1080),
+         "resolution": (1920, 1080), "stream_fps": 25.0, "codec": "H264", "bitrate_kbps": 2150,
+         "stream_label": "Sub-stream", "proc_fps": 10.0, "target_fps": 10, "skip_pct": 60.0,
+         "lost_pct": 0.0, "latency_p95_ms": 120, "reconnects_10m": 0,
+         "metrics": {"Orang terlacak": "3 orang", "Total pengunjung": "15 orang", "x": "y"}}
+    assert summary_lines(s) == ["1920×1080 · 25 fps · H.264 · 2.15 Mbps · Sub",
+                                ("Analisis 10 fps · Orang terlacak: 3 orang · "
+                                 "Total pengunjung: 15 orang")]
+    assert warnings(s) == []                                 # normal: tidak ada peringatan
+    bad = {**s, "lost_pct": 12.0, "latency_p95_ms": 650, "reconnects_10m": 3}
+    assert len(warnings(bad)) == 3
+    ds = {**s, "backend": "deepstream", "source_resolution": (2560, 1440),
+          "resolution": (1280, 720), "bitrate_kbps": None, "codec": ""}
+    assert summary_lines(ds)[0] == "2560×1440 · 25 fps · Sub"    # bitrate tak terukur: disembunyikan
+    sec = dict(detail_sections(ds))
+    assert dict(sec["Kamera"])["Resolusi"] == "2560×1440"
+    assert dict(sec["Analisis"])["Resolusi analisis"] == "1280×720"
+    assert "DeepStream" in dict(sec["Analisis"])["Backend"]
+
+
+def test_duration_and_codec_format():
+    from aio_cctv.gui.widgets.video_tile import fmt_codec, fmt_duration
+    assert fmt_duration(8) == "8 detik" and fmt_duration(125) == "2 menit 5 detik"
+    assert fmt_duration(3 * 3600 + 120) == "3 jam 2 menit"
+    assert fmt_duration(2 * 86400 + 3600) == "2 hari 1 jam"
+    assert fmt_codec("h264") == "H.264" and fmt_codec("hevc") == "H.265" and fmt_codec("") == ""

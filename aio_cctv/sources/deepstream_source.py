@@ -56,6 +56,7 @@ class DeepStreamSource:
         self._stopped = False
         self._last_seq = 0
         self._down_since: float | None = None
+        self.connected_since: float | None = None            # epoch, untuk uptime
 
     # ---------- siklus hidup ----------
     def start(self) -> bool:
@@ -103,11 +104,15 @@ class DeepStreamSource:
             self.fps = self.stats.recv_fps
         now = time.monotonic()
         if self.state == "streaming":
+            if self.connected_since is None:
+                self.connected_since = time.time()
             if self._down_since is not None:
                 self.stats.downtime_s += now - self._down_since
                 self._down_since = None
-        elif self._down_since is None and self.stats.frames_received:
-            self._down_since = now
+        else:
+            self.connected_since = None
+            if self._down_since is None and self.stats.frames_received:
+                self._down_since = now
 
     # ---------- konsumen ----------
     def read(self) -> Frame | None:

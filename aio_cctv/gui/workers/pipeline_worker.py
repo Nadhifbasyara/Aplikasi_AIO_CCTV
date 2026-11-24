@@ -69,6 +69,8 @@ class PipelineWorker(QThread):
         # Fase 9 §5.5: diisi Live View; False = tile tidak terlihat → tidak perlu anotasi/QImage
         self.gui_visible = True
         self.backend_note = ""                     # alasan fallback DeepStream → Python
+        self.stream_label = ""                     # "Main-stream"/"Sub-stream" (diisi manager)
+        self._reconnect_hist: list[tuple[float, int]] = []   # (waktu, total reconnect)
 
     def _make_source(self):
         if self.uri.startswith("rtsp://"):
@@ -215,6 +217,12 @@ class PipelineWorker(QThread):
                     flow = frame_flow(cam_fps, proc_fps,
                                       self.target_fps if is_rtsp else 0.0)
                     kib_s = getattr(stream_stats, "bandwidth_kbps", 0.0)
+                    reconnects = getattr(stream_stats, "reconnects", 0)
+                    self._reconnect_hist.append((now, reconnects))
+                    while self._reconnect_hist and now - self._reconnect_hist[0][0] > 600:
+                        self._reconnect_hist.pop(0)
+                    since = getattr(src, "connected_since", None) or \
+                        getattr(stream_stats, "connected_since", None)
                     stats = {
                         "state": getattr(src, "state", "file"),
                         "stream_type": "RTSP/TCP · DeepStream" if is_ds else
@@ -225,6 +233,11 @@ class PipelineWorker(QThread):
                         # bitrate seperti di pengaturan kamera (kilobit/s); None = tak terukur
                         "bitrate_kbps": None if kib_s is None else kib_s * 8 * 1.024,
                         "codec": getattr(src, "codec", ""),
+                        "stream_label": self.stream_label,
+                        "transport": "RTSP/TCP" if is_rtsp else "File",
+                        "uptime_s": time.time() - since
+                        if since and getattr(src, "state", "") == "streaming" else 0.0,
+                        "reconnects_10m": reconnects - self._reconnect_hist[0][1],
                         "total_frames": frames_rx,             # frame dari kamera
                         "decoded_frames": frames_cx,           # frame yang dianalisis
                         "skip_pct": flow["skip_pct"],          # dilewati sengaja (FPS target)

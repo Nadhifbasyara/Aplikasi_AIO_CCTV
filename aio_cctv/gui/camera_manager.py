@@ -224,6 +224,8 @@ class CameraManager(QObject):
         w = PipelineWorker(cam_id, self.source_uri(cam), profile, settings or app_settings(),
                            self.modules.get(mid), mid, profile.module.params,
                            storage=self.storage, rules=rules, frames=self.frames)
+        if cam.brand not in ("custom", "file", "webcam"):   # URL dari template merek
+            w.stream_label = {"main": "Main-stream", "sub": "Sub-stream"}.get(cam.stream, "")
         w.finished.connect(lambda cid=cam_id, worker=w: self._on_worker_finished(cid, worker))
         w.stats_ready.connect(self._on_stats)
         w.error.connect(self._on_error)
