@@ -28,6 +28,9 @@ def main() -> int:
     ap.add_argument("--module", default="baseline")
     ap.add_argument("--video", default="data/bench/klip720p15.mp4",
                     help="klip untuk membangun engine (file, diputar berulang)")
+    ap.add_argument("--batches", default="4,8,16,32",
+                    help="ukuran batch engine yang disiapkan (aplikasi memilih sesuai jumlah "
+                         "kamera per model)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -42,21 +45,30 @@ def main() -> int:
     print("3/4 ekspor ONNX…", flush=True)
     d, names = service.ensure_onnx(m)
     print(f"     {d}  ({len(names)} kelas)")
-    engine = d / f"model_b{service.ENGINE_BATCH}_gpu0_fp16.engine"
-    if engine.exists():
-        print("4/4 engine TensorRT sudah ada:", engine)
-        return 0
-    print("4/4 membangun engine TensorRT FP16 (±30–60 detik)…", flush=True)
     video = (ROOT / args.video).resolve()
     if not video.exists():
         sys.exit(f"klip tidak ditemukan: {video}")
-    _group, slot = service.POOL.acquire(("setup", m.id), m, "setup", video.as_uri(), 1280, 720)
-    ok = service.wait_streaming(slot, 300)
-    time.sleep(1)
-    service.POOL.release("setup")
-    if not ok or not engine.exists():
-        sys.exit("gagal — lihat log di ~/.cache/aio-cctv/deepstream/logs/")
-    print("selesai:", engine)
+    batches = [int(b) for b in args.batches.split(",")]
+    for i, batch in enumerate(batches, 1):
+        engine = d / f"model_b{batch}_gpu0_fp16.engine"
+        if engine.exists():
+            print(f"4/4 [{i}/{len(batches)}] engine batch {batch} sudah ada")
+            continue
+        print(f"4/4 [{i}/{len(batches)}] membangun engine batch {batch} (±30–60 detik)…",
+              flush=True)
+        # jumlah sumber = batch → service memilih engine ukuran ini
+        ids = [f"setup{k}" for k in range(batch)]
+        slot = None
+        for cid in ids:
+            _g, s = service.POOL.acquire(("setup", m.id), m, cid, video.as_uri(), 1280, 720)
+            slot = slot or s
+        ok = service.wait_streaming(slot, 300)
+        time.sleep(1)
+        for cid in ids:
+            service.POOL.release(cid)
+        if not ok or not engine.exists():
+            sys.exit("gagal — lihat log di ~/.cache/aio-cctv/deepstream/logs/")
+    print("selesai:", d)
     return 0
 
 

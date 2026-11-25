@@ -70,6 +70,7 @@ class PipelineWorker(QThread):
         self.gui_visible = True
         self.backend_note = ""                     # alasan fallback DeepStream → Python
         self.stream_label = ""                     # "Main-stream"/"Sub-stream" (diisi manager)
+        self._ds_error = ""                        # alasan DeepStream terakhir yang ditampilkan
         self._reconnect_hist: list[tuple[float, int]] = []   # (waktu, total reconnect)
 
     def _make_source(self):
@@ -131,7 +132,10 @@ class PipelineWorker(QThread):
             if hasattr(src, "cancel"):             # DeepStream: start bisa ±2 menit (engine)
                 src.cancel = self.isInterruptionRequested
             if src.start() is False:
-                self.error.emit(self.cam_id, "Tidak dapat terhubung ke kamera")
+                why = getattr(src, "error", "")      # DeepStream: alasan sebenarnya
+                self.error.emit(self.cam_id, mask(f"DeepStream: {why} — mencoba lagi otomatis")
+                                if why else "Tidak dapat terhubung ke kamera")
+                self._ds_error = why
             res = None
             last_emit, n, t_fps = 0.0, 0, time.monotonic()
             lat_window: list[float] = []           # latensi tiap frame dalam jendela 1 detik
@@ -229,6 +233,7 @@ class PipelineWorker(QThread):
                         "RTSP/TCP" if isinstance(src, RTSPSource) else "File",
                         "backend": "deepstream" if is_ds else "python",
                         "backend_note": self.backend_note,
+                        "ds_error": self._ds_error,
                         "bandwidth_kbps": kib_s or 0.0,            # KiB/s (nama lama)
                         # bitrate seperti di pengaturan kamera (kilobit/s); None = tak terukur
                         "bitrate_kbps": None if kib_s is None else kib_s * 8 * 1.024,
@@ -270,6 +275,12 @@ class PipelineWorker(QThread):
                     }
                     lat_window = []
                     self.stats_ready.emit(self.cam_id, stats)
+                    if is_ds:                      # container gagal/pulih saat berjalan
+                        why = src.error if stats["state"] != "streaming" else ""
+                        if why and why != self._ds_error:
+                            self.error.emit(self.cam_id,
+                                            mask(f"DeepStream: {why} — mencoba lagi otomatis"))
+                        self._ds_error = why
                     if health is not None:
                         health.add(stats, time.time())
                     n, t_fps = 0, now

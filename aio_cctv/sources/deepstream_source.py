@@ -85,6 +85,19 @@ class DeepStreamSource:
         return shm.STATE_NAMES.get(self.slot.get("conn"), "connecting")
 
     @property
+    def error(self) -> str:
+        """Alasan DeepStream gagal/berhenti (VRAM habis, stream tak terbuka, …); "" = normal."""
+        g = self.group
+        if g is None:
+            return ""
+        if getattr(g, "last_error", ""):
+            return g.last_error
+        if self.state != "streaming" and hasattr(g, "log_tail"):
+            from aio_cctv.inference.deepstream.service import diagnose
+            return diagnose(g.log_tail(20000))
+        return ""
+
+    @property
     def infer_ms(self) -> float:
         return float(self.slot.get("infer_ms")) if self.slot is not None else 0.0
 

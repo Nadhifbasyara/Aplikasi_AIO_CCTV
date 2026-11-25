@@ -43,7 +43,8 @@ from aio_cctv.zones.models import Profile  # noqa: E402
 
 FIELDS = ["waktu", "label", "n", "lolos", "alasan", "fps_min", "fps_median", "fps_target",
           "latensi_p50_ms", "latensi_p95_ms", "drop_pct", "cpu_pct", "gpu_pct", "vram_mb",
-          "vram_pct", "ram_mb", "proc_cpu_pct", "decode_ms", "detect_ms", "module_ms", "render_ms", "pengaturan"]
+          "vram_pct", "ram_mb", "proc_cpu_pct", "decode_ms", "detect_ms", "module_ms", "render_ms",
+          "pengaturan", "vram_total_mb", "gpu_watt", "nvdec_pct"]
 
 
 def _parse_value(v: str):
@@ -85,7 +86,7 @@ def stop_sim(p: subprocess.Popen) -> None:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def run_n(n: int, args, module, profile, settings, sampler, vram_total) -> dict:
+def run_n(n: int, args, module, profile, settings, sampler, vram_cap) -> dict:
     stats: dict[str, list[dict]] = {}
     errors: list[str] = []
     measuring = [False]
@@ -146,13 +147,16 @@ def run_n(n: int, args, module, profile, settings, sampler, vram_total) -> dict:
         return statistics.mean(vals) if vals else 0.0
 
     vram = max((s["vram_mb"] or 0) for s in sys_samples) if sys_samples else 0
+    vram_total = max((s.get("vram_total_mb") or 0) for s in sys_samples) if sys_samples else 0
     out = {
         "n": n, "fps_min": min(fps_per_cam), "fps_median": statistics.median(fps_per_cam),
         "fps_target": statistics.median(target) if target else 0.0,
         "latensi_p50_ms": pctl(lat_all, 0.5), "latensi_p95_ms": max(lat_p95),
         "drop_pct": statistics.mean(drop) if drop else 0.0,
         "cpu_pct": avg("cpu_pct"), "gpu_pct": avg("gpu_pct"), "vram_mb": vram,
-        "vram_pct": 100 * vram / vram_total if vram_total else 0.0,
+        # kriteria VRAM memakai seluruh GPU: di Jalur B memori dipakai container, bukan proses ini
+        "vram_pct": 100 * (vram_total or vram) / vram_cap if vram_cap else 0.0,
+        "vram_total_mb": vram_total, "gpu_watt": avg("gpu_watt"), "nvdec_pct": avg("nvdec_pct"),
         "ram_mb": max((s["ram_mb"] for s in sys_samples), default=0),
         "proc_cpu_pct": statistics.mean(proc_cpu) if proc_cpu else 0.0,
         **{k: statistics.mean(v) if v else 0.0 for k, v in stage.items()},
@@ -209,35 +213,40 @@ def main() -> int:
 
     app = QApplication(sys.argv)  # noqa: F841  (QImage & sinyal lintas-thread butuh app)
     sampler = SystemSampler()
-    vram_total = 0
+    vram_cap = 0
     if sampler._gpu is not None:
-        vram_total = sampler._nvml.nvmlDeviceGetMemoryInfo(sampler._gpu).total / 2**20
+        vram_cap = sampler._nvml.nvmlDeviceGetMemoryInfo(sampler._gpu).total / 2**20
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    new = not out.exists()
+    new = not out.exists() or out.stat().st_size == 0   # file kosong: tulis header lagi
+    fields = FIELDS
+    if not new:                                 # CSV lama (kolom lebih sedikit): ikuti headernya
+        with open(out, newline="") as fh:
+            fields = next(csv.reader(fh), FIELDS) or FIELDS
     sim = None if args.no_sim else start_sim(args.video, max(cams) + args.cam_offset)
     results = []
     try:
         with open(out, "a", newline="") as fh:
-            wr = csv.DictWriter(fh, fieldnames=FIELDS)
+            wr = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
             if new:
                 wr.writeheader()
             for n in cams:
                 print(f"[{args.label}] N={n}: pemanasan {args.warmup}s, ukur {args.duration}s…",
                       flush=True)
-                r = run_n(n, args, module, profile, settings, sampler, vram_total)
+                r = run_n(n, args, module, profile, settings, sampler, vram_cap)
                 r.update(waktu=datetime.now().isoformat(timespec="seconds"), label=args.label,
                          pengaturan=json.dumps({**overrides, "render": args.render,
                                                     "video": Path(args.video).name}))
                 wr.writerow({k: (f"{v:.2f}" if isinstance(v, float) else v)
-                             for k, v in r.items() if k in FIELDS})
+                             for k, v in r.items() if k in fields})
                 fh.flush()
                 results.append(r)
                 print(f"   {'LOLOS' if r['lolos'] else 'GAGAL'}  fps min/med "
                       f"{r['fps_min']:.1f}/{r['fps_median']:.1f}  p95 {r['latensi_p95_ms']:.0f} ms"
-                      f"  CPU {r['cpu_pct']:.0f}%  GPU {r['gpu_pct']:.0f}%  VRAM "
-                      f"{r['vram_mb']:.0f} MB  proses {r['proc_cpu_pct']:.0f}%  det {r['detect_ms']:.1f} mod {r['module_ms']:.1f}"
+                      f"  CPU {r['cpu_pct']:.0f}%  GPU {r['gpu_pct']:.0f}%  NVDEC "
+                      f"{r['nvdec_pct']:.0f}%  {r['gpu_watt']:.0f} W  VRAM GPU "
+                      f"{r['vram_total_mb']:.0f} MB  proses {r['proc_cpu_pct']:.0f}%  det {r['detect_ms']:.1f} mod {r['module_ms']:.1f}"
                       f" dec {r['decode_ms']:.1f} ren {r['render_ms']:.1f} ms  {r['alasan']}",
                       flush=True)
                 if not r["lolos"] and not args.keep_going:

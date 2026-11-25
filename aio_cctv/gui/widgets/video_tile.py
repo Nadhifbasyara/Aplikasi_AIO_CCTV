@@ -88,6 +88,8 @@ def summary_lines(s: dict) -> list[str]:
 def warnings(s: dict) -> list[str]:
     """Peringatan yang perlu dilihat operator; kosong = semua normal."""
     out = []
+    if s.get("ds_error"):
+        out.append(f"DeepStream: {s['ds_error']} — mencoba lagi otomatis")
     if s.get("lost_pct", 0.0) > LOST_WARN_PCT:
         out.append(f"Frame hilang {s['lost_pct']:.0f}% — PC kewalahan")
     if not _is_file(s) and s.get("latency_p95_ms", 0.0) > LATENCY_WARN_MS:

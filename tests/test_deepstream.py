@@ -185,3 +185,18 @@ def test_duration_and_codec_format():
     assert fmt_duration(3 * 3600 + 120) == "3 jam 2 menit"
     assert fmt_duration(2 * 86400 + 3600) == "2 hari 1 jam"
     assert fmt_codec("h264") == "H.264" and fmt_codec("hevc") == "H.265" and fmt_codec("") == ""
+
+
+def test_engine_batch_and_failure_diagnosis():
+    from aio_cctv.inference.deepstream.service import diagnose, engine_batch
+    assert [engine_batch(n) for n in (1, 4, 5, 9, 17, 80)] == [4, 4, 8, 16, 32, 32]
+    m = load_manifest(BUNDLED_MODULES_DIR / "baseline")
+    cfg = infer_config(m, ["person"], batch=4)
+    assert "batch-size=4" in cfg and "model_b4_gpu0_fp16.engine" in cfg
+    assert "memori" in diagnose("ERROR: [TRT]: Error Code 2: OutOfMemory (Requested size …)")
+    assert "memori" in diagnose("gst_nvinfer_start: error: Failed to set buffer pool to active")
+    assert "stream kamera" in diagnose("WARNING from src: Internal data stream error.")
+    assert diagnose("semua normal") == ""
+    from aio_cctv.gui.widgets.video_tile import warnings
+    assert warnings({"ds_error": "GPU kehabisan memori"})[0].startswith("DeepStream: GPU")
+

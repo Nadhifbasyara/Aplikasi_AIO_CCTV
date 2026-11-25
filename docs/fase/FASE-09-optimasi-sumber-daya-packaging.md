@@ -291,7 +291,7 @@ Pengaturan → Optimasi multi-kamera → **Backend deteksi**: `Python (Ultralyti
 2. ✅ YOLO11n → ONNX → `nvinfer` FP16; deteksi dicek visual (hanya kelas orang, kotak tepat). ⬜ Perbandingan kuantitatif dengan Ultralytics (IoU rata-rata > 0,95, jumlah deteksi ±2%) — bagian uji konsistensi.
 3. ✅ Uji batas atas tanpa tracker/modul (`~/ds-trial/bench_ds.py`, baris B0 §7).
 4. ✅ Integrasi ke aplikasi (`DeepStreamSource`), modul baseline berjalan di atasnya (2026-11-24). ⬜ Uji paritas terhadap Jalur A.
-5. ⬜ `N_max` Jalur B final: `benchmark_capacity.py --set backend=deepstream`, 2 ulangan × 600 s (§7).
+5. ✅ `N_max` Jalur B final: `scripts/jalan_semalam.sh deepstream`, 2 ulangan × 600 s (2026-11-25, baris B2–B4 §7).
 
 ## 6. Integrasi DVR/NVR (RM-2)
 
@@ -332,16 +332,13 @@ Uji minimal: **1 DVR fisik (≥ 4 channel)** dengan merek yang tersedia (Hikvisi
 | # | Konfigurasi | `N_max` | FPS/kamera (N=8) | Latensi p95 | CPU % | GPU % | VRAM | RAM |
 |---|---|---|---|---|---|---|---|---|
 | B0 | **Uji coba batas atas** (2026-11-24): `deepstream-app` 9.1, NVDEC + `nvstreammux` + `nvinfer` YOLO11n TensorRT 10.16 FP16 (hanya kelas orang), **tanpa tracker, modul, maupun tampilan**; pemanasan 20 s + ukur 60 s | 128+ (FPS min ≥ 8) / **96** (≥ 90% FPS sumber) | 15,0 | — | 4% | 15% | 1,8 GB | — |
-| B2v | **Lewat aplikasi** (2026-11-24, uji cepat 40 + 60 s): DeepStream + frame atas permintaan + FPS target 10 + modul baseline (ByteTrack), **semua tile tampil** — padanan baris A3 | **24** (proposal: 16) | 10,0 | 28 ms | 8% | 13% | 1,9 GB | — |
-| B2h | Sama, **analisis saja** (render hidden) — padanan baris A4 | **48** (proposal: 48) | — | 42 ms @N=16 | 10% @N=16 | 20% @N=16 | 2,3 GB @N=16 | — |
-| B1 | DeepStream: NVDEC + `nvstreammux` + `nvinfer` FP16, frame selalu disalin ke CPU | | | | | | | |
-| B2 | B1 + salin frame hanya bila modul membutuhkan | | | | | | | |
-| B3 | B2 + sub-stream | | | | | | | |
-| B4 | B3 + `interval` `nvinfer` / FPS adaptif (target 10) | | | | | | | |
+| B2 | **Final** (2 ulangan × 600 s, 2026-11-24/25): DeepStream lewat aplikasi + frame atas permintaan + FPS target 10 + modul baseline (ByteTrack), **semua tile tampil** — padanan A3 | **32** (proposal: 24) | 10,0 | 26 ms | 8% | 10% | 1,8 GB GPU | 0,8 GB |
+| B3 | Sama, **analisis saja** (render hidden) — padanan A4 | **48** (proposal: 40) | 10,0 | 22 ms | 7% | 10% | 1,7 GB GPU | 0,7 GB |
+| B4 | B3 **tanpa batas FPS** (15 fps penuh) | **56** (proposal: 32) | 15,0 | 24 ms | 8% | 12% | 1,8 GB GPU | 0,7 GB |
 
-> **B0** hanya batas atas. Pada 96 kamera GPU sudah 98% (NVDEC 42%, CPU 20%, VRAM 4,4 GB, daya GPU ±121 W), jadi hambatannya berpindah dari CPU/GIL (Jalur A) ke GPU. Di atas ±90 stream, container butuh `--ulimit nofile=65536`. Alat: `~/ds-trial/bench_ds.py` + `make_cfg.py` (konfigurasi `deepstream-app` per N); data `~/ds-trial/kapasitas-deepstream-cepat.csv`. Angka B1–B4 baru bermakna setelah tracker + modul ikut berjalan (§5.8).
+> **B0** hanya batas atas. Pada 96 kamera GPU sudah 98% (NVDEC 42%, CPU 20%, VRAM 4,4 GB, daya GPU ±121 W), jadi hambatannya berpindah dari CPU/GIL (Jalur A) ke GPU. Di atas ±90 stream, container butuh `--ulimit nofile=65536`. Alat: `~/ds-trial/bench_ds.py` + `make_cfg.py` (konfigurasi `deepstream-app` per N); data `~/ds-trial/kapasitas-deepstream-cepat.csv`. Angka B2–B4 (lewat aplikasi, tracker + modul ikut berjalan) adalah angka yang dibandingkan dengan Jalur A. Sub-stream belum diukur.
 
-> **B2v/B2h** (uji cepat, perlu diulang 2 × 600 s): dibanding Jalur A terbaik, `N_max` naik **18 → 24** (Live terlihat) dan **20 → 48** (analisis saja); latensi p95 di N=8 turun 117 → 28 ms dan CPU proses aplikasi 138% → 36%. Saat gagal (B2h, N=56) GPU baru 67% dan CPU sistem 27%, sedangkan CPU proses aplikasi ±140% dengan `module_ms` naik 6 → 51 ms: hambatannya kini **tracker + analitik modul di Python (GIL)**, bukan decode/deteksi. Pada B2v, menggambar tile (`render_ms` 8 → 48 ms) ikut membatasi. Langkah berikutnya yang relevan: multi-proses untuk worker modul (§5.6), bukan backend deteksi.
+> **B2–B4 final** (data `kapasitas-final-deepstream.csv`, log `bench-ds.log`; `N_max` kedua ulangan identik). Dibanding Jalur A terbaik: **18 → 32** kamera (Live terlihat, A3 → B2) dan **20 → 48** (analisis saja, A4 → B3); dengan kriteria proposal 16 → 24 dan 20 → 40. Di N=8: latensi p95 115 → 26 ms, CPU proses aplikasi 133% → 33%, CPU sistem 13% → 8%. VRAM Jalur B diukur untuk **seluruh GPU** (container + desktop), sedangkan kolom VRAM Jalur A hanya proses aplikasi, jadi keduanya tidak dibandingkan langsung. Di `N_max` B3 (48 kamera): GPU 62%, NVDEC 22%, CPU sistem 25%, daya GPU ±92 W; CPU proses aplikasi ±137% dengan `module_ms` naik 3 → 34 ms (B4 56 kamera: 72 ms). Hambatannya kini **tracker + analitik modul di Python (GIL)**, bukan decode/deteksi; pada B2 menggambar tile (`render_ms` 7 → 46 ms) ikut membatasi. **Catatan B3 vs B4:** tanpa batas FPS justru lolos sampai 56 kamera (kriteria FPS ≥ 8), karena di Jalur B worker yang memakai FPS target meminta frame baru tepat saat jadwalnya lalu menunggu frame berikut (≤ 1 interval kamera), sehingga saat sistem sibuk jadwalnya mudah tertinggal. Dengan kriteria proposal (≥ 90% target), FPS target tetap lebih unggul (40 vs 32). Perbaikan yang relevan: meminta frame sedikit sebelum jadwal (prefetch) dan multi-proses untuk worker modul (§5.6).
 
 **Perbandingan akhir:** baris terbaik Jalur A vs baris terbaik Jalur B, per perangkat × modul. Bila hambatan utamanya ada di `module_ms` (mis. Re-ID TA-2), selisih kedua jalur akan mengecil. Hal ini **justru temuan yang perlu dilaporkan**, karena menunjukkan batas yang ditentukan modul, bukan host.
 

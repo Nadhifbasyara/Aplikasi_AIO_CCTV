@@ -41,7 +41,31 @@ VENDOR = ROOT / "third_party" / "deepstream_yolo"
 BASE_IMAGE = "nvcr.io/nvidia/deepstream:9.1-triton-multiarch"
 IMAGE = "aio-cctv/deepstream:9.1"
 CUDA_VER = "13.2"                     # CUDA di dalam image DeepStream 9.1
-ENGINE_BATCH = 32                     # batch maksimum engine; mux boleh lebih (nvinfer memecah)
+ENGINE_BATCHES = (4, 8, 16, 32)       # ukuran batch engine; mux boleh lebih (nvinfer memecah)
+RESTART_BACKOFF_S = (5, 10, 20, 40, 60)
+
+
+def engine_batch(n_cams: int) -> int:
+    """Batch engine terkecil yang ≥ jumlah kamera (maks 32). Memori kerja TensorRT sebanding
+    batch (YOLO11m: batch 32 ±900 MB, batch 4 ±115 MB), jadi kamera sedikit = VRAM hemat.
+    Engine tiap ukuran dibangun sekali (±30–50 s) lalu disimpan di cache."""
+    return next((b for b in ENGINE_BATCHES if b >= n_cams), ENGINE_BATCHES[-1])
+
+
+def diagnose(log_text: str) -> str:
+    """Terjemahkan log runner jadi alasan yang bisa ditindaklanjuti pengguna."""
+    t = log_text.lower()
+    if any(k in t for k in ("outofmemory", "out of memory", "failed to set buffer pool",
+                            "cudaerrormemoryallocation")):
+        return ("GPU kehabisan memori (VRAM sedang dipakai program lain?) — "
+                "tutup program yang memakai GPU atau kurangi jumlah model berbeda")
+    if any(k in t for k in ("401", "unauthorized")):
+        return "akun/password kamera ditolak"
+    if any(k in t for k in ("internal data stream error", "could not open resource",
+                            "could not connect", "not found")):
+        return ("stream kamera tidak bisa dibuka (cek URL & jaringan; NVR/DVR mungkin "
+                "membatasi jumlah koneksi)")
+    return ""
 DEBOUNCE_S = 1.5
 CACHE = Path(os.environ.get("AIO_DS_CACHE", user_cache_dir("aio-cctv", "tugasakhir"))) / \
     "deepstream"
@@ -136,7 +160,7 @@ def ensure_onnx(manifest) -> tuple[Path, list[str]]:
     return d, names
 
 
-def infer_config(manifest, names: list[str]) -> str:
+def infer_config(manifest, names: list[str], batch: int = ENGINE_BATCHES[-1]) -> str:
     """Isi config nvinfer, setara Detector Jalur A (kelas, conf, iou, imgsz dari manifest)."""
     m = manifest.model
     wanted = set(m.classes or names)
@@ -151,9 +175,9 @@ def infer_config(manifest, names: list[str]) -> str:
         "net-scale-factor=0.0039215697906911373",
         "model-color-format=0",
         "onnx-file=/aio/model/model.onnx",
-        f"model-engine-file=/aio/model/model_b{ENGINE_BATCH}_gpu0_fp16.engine",
+        f"model-engine-file=/aio/model/model_b{batch}_gpu0_fp16.engine",
         "labelfile-path=/aio/model/labels.txt",
-        f"batch-size={ENGINE_BATCH}",
+        f"batch-size={batch}",
         "network-mode=2",                       # FP16 (Proposal §2.6)
         f"num-detected-classes={len(names)}",
         "interval=0",
@@ -212,13 +236,16 @@ class Group:
         self._proc: subprocess.Popen | None = None
         self.model_dir: Path | None = None
         self.parser: Path | None = None
+        self.names: list[str] = []
+        self.last_error = ""                  # alasan container terakhir berhenti/gagal
+        self._gen = 0                         # naik tiap restart/stop; watcher lama diabaikan
+        self._fails = 0
+        self._closing = False
 
     def prepare(self) -> None:
         check_environment()
         self.parser = parser_lib()
-        self.model_dir, names = ensure_onnx(self.manifest)
-        (self.model_dir / "config_infer.txt").write_text(infer_config(self.manifest, names))
-        self.names = names
+        self.model_dir, self.names = ensure_onnx(self.manifest)
 
     def add(self, cam_id: str, uri: str) -> shm.Slot:
         with self._lock:
@@ -250,6 +277,7 @@ class Group:
         self._timer.start()
 
     def _stop_container(self) -> None:
+        self._gen += 1                            # berhenti disengaja: watcher tidak bereaksi
         _run(["docker", "rm", "-f", self.name], timeout=30)
         if self._proc is not None:
             try:
@@ -269,7 +297,10 @@ class Group:
             shutil.rmtree(self.run_dir, ignore_errors=True)
             return
         self.run_dir.mkdir(parents=True, exist_ok=True)
-        cfg = {"infer_config": "/aio/model/config_infer.txt", "width": self.width,
+        batch = engine_batch(len(cams))
+        cfg_name = f"config_infer_b{batch}.txt"
+        (self.model_dir / cfg_name).write_text(infer_config(self.manifest, self.names, batch))
+        cfg = {"infer_config": f"/aio/model/{cfg_name}", "width": self.width,
                "height": self.height,
                "cams": [{"id": cid, "uri": uri, "slot": str(path)}
                         for cid, (uri, path) in cams.items()]}
@@ -291,8 +322,42 @@ class Group:
                "python3", "/aio/ds/runner.py", "/aio/run/cameras.json"]
         logf = open(self.run_dir / "runner.log", "w")  # noqa: SIM115 — dipakai Popen sampai container berhenti
         self._proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
-        log.info("DeepStream %s: %d kamera (%s)", self.name, len(cams),
+        gen, started = self._gen, time.monotonic()
+        threading.Thread(target=self._watch, args=(self._proc, gen, started), daemon=True,
+                         name=f"{self.name}-watch").start()
+        log.info("DeepStream %s: %d kamera, engine batch %d (%s)", self.name, len(cams), batch,
                  Path(self.manifest.weights_path).name)
+
+    def _watch(self, proc: subprocess.Popen, gen: int, started: float) -> None:
+        """Container berhenti tanpa diminta (VRAM habis, crash): catat alasannya, tandai kamera
+        menyambung ulang, lalu coba lagi dengan jeda yang makin panjang."""
+        proc.wait()
+        if self._closing or gen != self._gen:
+            return
+        self.last_error = diagnose(self.log_tail(20000)) or \
+            f"container DeepStream berhenti (kode {proc.returncode}); log: {CACHE / 'logs'}"
+        if time.monotonic() - started > 120:      # sempat berjalan lama: hitung ulang dari awal
+            self._fails = 0
+        delay = RESTART_BACKOFF_S[min(self._fails, len(RESTART_BACKOFF_S) - 1)]
+        self._fails += 1
+        log.warning("DeepStream %s berhenti: %s — coba lagi %d s", self.name, self.last_error,
+                    delay)
+        logs = CACHE / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(self.run_dir / "runner.log", logs / f"{self.name}-gagal{self._fails}.log")
+        except OSError:
+            pass
+        with self._lock:
+            for slot in self.slots.values():
+                slot.set("conn", shm.RECONNECTING)
+                slot.set("reconnects", int(slot.get("reconnects")) + 1)
+            if self.cams:
+                if self._timer is not None:
+                    self._timer.cancel()
+                self._timer = threading.Timer(delay, self._restart)
+                self._timer.daemon = True
+                self._timer.start()
 
     def alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
@@ -304,6 +369,7 @@ class Group:
             return ""
 
     def shutdown(self) -> None:
+        self._closing = True
         if self._timer is not None:
             self._timer.cancel()
         self._stop_container()
