@@ -95,14 +95,15 @@ class ZoneCanvas(QGraphicsView):
         super().__init__(QGraphicsScene())
         self.drafting = False
         self.overlay_top = None          # toolbar mengambang
+        self.overlay_hint = None         # petunjuk, kotak terpisah di bawah toolbar
         self.overlay_chip = None         # "Sedang menggambar…"
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setStyleSheet("background:#111;")
 
     def place_overlays(self) -> None:
         y = 10
-        for w in (self.overlay_top, self.overlay_chip):
-            if w is not None:
+        for w in (self.overlay_top, self.overlay_hint, self.overlay_chip):
+            if w is not None and not w.isHidden():
                 w.adjustSize()
                 w.move((self.width() - w.width()) // 2, y)
                 y += w.height() + 6
@@ -196,13 +197,19 @@ class ZoneEditorPage(QWidget):
         bar.addWidget(self.btn_snapshot)
 
         # toolbar mengambang di atas kanvas
+        # toolbar mengambang di atas kanvas: tombol (ikon di atas teks) + petunjuk di bawahnya
         self.floatbar = QFrame(self.canvas)
         self.floatbar.setObjectName("floatbar")
-        fb = QHBoxLayout(self.floatbar)
-        fb.setContentsMargins(6, 4, 6, 4)
-        fb.setSpacing(2)
-        self.btn_mode_zone = self._float_button("Zona", "zone", checkable=True)
-        self.btn_mode_line = self._float_button("Garis", "line", checkable=True)
+        fv = QVBoxLayout(self.floatbar)
+        fv.setContentsMargins(6, 4, 6, 4)
+        fv.setSpacing(4)
+        fb = QHBoxLayout()
+        fb.setSpacing(4)
+        fv.addLayout(fb)
+        self.btn_mode_zone = self._float_button("ZONA (Poligon)", "zone", checkable=True,
+                                                color=theme.BAD)
+        self.btn_mode_line = self._float_button("GARIS (Lintasan)", "line", checkable=True,
+                                                color="#42A5F5")
         self.btn_mode_zone.setChecked(True)
         self.btn_mode_zone.clicked.connect(lambda: self._set_mode("zona"))
         self.btn_mode_line.clicked.connect(lambda: self._set_mode("garis"))
@@ -216,18 +223,19 @@ class ZoneEditorPage(QWidget):
         self.btn_clear.clicked.connect(self.clear_all)
         for w in (self.btn_mode_zone, self.btn_mode_line, sep, self.btn_undo, self.btn_clear):
             fb.addWidget(w)
+        self.lbl_hint = QLabel(self.canvas)        # kotak sendiri di bawah toolbar
+        self.lbl_hint.setObjectName("floatHint")
+        self.lbl_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.chip = QLabel("Sedang menggambar…", self.canvas)
         self.chip.setObjectName("chip")
         self.chip.hide()
         self.canvas.overlay_top, self.canvas.overlay_chip = self.floatbar, self.chip
+        self.canvas.overlay_hint = self.lbl_hint
         QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo)
 
         left = QVBoxLayout()
         left.addLayout(bar)
         left.addWidget(self.canvas, 1)
-        self.lbl_hint = QLabel()
-        self.lbl_hint.setStyleSheet(f"color:{theme.MUTED};")
-        left.addWidget(self.lbl_hint)
         left_w = QWidget()
         left_w.setLayout(left)
         main_layout.addWidget(left_w, 3)
@@ -247,12 +255,12 @@ class ZoneEditorPage(QWidget):
         return b
 
     @staticmethod
-    def _float_button(text: str, ico: str, checkable: bool = False,
-                      under: bool = False) -> QToolButton:
+    def _float_button(text: str, ico: str, checkable: bool = False, under: bool = True,
+                      color: str = theme.TEXT) -> QToolButton:
         b = QToolButton()
         b.setText(text)
-        b.setIcon(icon(ico, theme.TEXT))
-        b.setIconSize(QSize(18, 18) if not under else QSize(16, 16))
+        b.setIcon(icon(ico, color))
+        b.setIconSize(QSize(18, 18))
         b.setCheckable(checkable)
         b.setAutoExclusive(checkable)
         b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -517,11 +525,14 @@ class ZoneEditorPage(QWidget):
 
     def _update_hint(self) -> None:
         if self.mode == "zona":
-            self.lbl_hint.setText("Mode ZONA — klik kiri menambah titik, klik-ganda atau Enter "
-                                  "menutup poligon, Esc membatalkan, Ctrl+Z undo.")
+            self.lbl_hint.setText("Klik kiri untuk menambah titik • Klik ganda / Enter untuk "
+                                  "menutup zona")
+            self.lbl_hint.setToolTip("Esc membatalkan gambar • Ctrl+Z membatalkan titik terakhir")
         else:
-            self.lbl_hint.setText("Mode GARIS — klik dua titik; panah menunjuk arah IN. "
-                                  "Esc membatalkan.")
+            self.lbl_hint.setText("Klik dua titik untuk membuat garis • Panah menunjuk arah MASUK")
+            self.lbl_hint.setToolTip("Esc membatalkan gambar • Ctrl+Z membatalkan perubahan terakhir")
+        if self.canvas.overlay_top is not None:
+            self.canvas.place_overlays()           # lebar petunjuk berubah: tengahkan lagi
 
     def _on_click(self, pos: QPointF) -> None:
         if self.pix_item.pixmap().isNull():

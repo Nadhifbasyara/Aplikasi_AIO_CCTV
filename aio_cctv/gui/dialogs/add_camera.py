@@ -6,7 +6,7 @@ lewat `net_tasks.run_async`, jadi dialog tidak pernah membeku.
 import re
 import socket
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -39,6 +38,7 @@ from aio_cctv.gui.camera_manager import (
     build_source_uri,
     source_config,
 )
+from aio_cctv.gui.icons import icon
 from aio_cctv.gui.utils import app_settings, friendly_error, to_qimage
 from aio_cctv.gui.widgets.module_params import ModuleParamsForm
 from aio_cctv.gui.workers.net_tasks import discover_cameras, run_async
@@ -146,17 +146,46 @@ class AddCameraDialog(QDialog):
         self._alive = True
         self._testing = False
         self._loaded_pw = ""
-        self.setWindowTitle("Ubah kamera" if cam else "Tambah kamera")
-        self._fit_to_screen()
+        self.setWindowTitle("Ubah Kamera" if cam else "Tambah Kamera")
         self._setup_ui()
         if cam:
             self._load(cam)
         self._refresh_url()
+        self._fit_to_screen()
 
     # ------------------------------------------------------------------ UI
+    @staticmethod
+    def _section(title: str) -> tuple[QFrame, QVBoxLayout, QLabel]:
+        """Kartu bagian formulir: judul + isi, seperti desain dialog Tambah Kamera."""
+        box = QFrame(objectName="formSection")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(14, 10, 14, 12)
+        lay.setSpacing(8)
+        lbl = QLabel(title, objectName="sectionTitle")
+        lay.addWidget(lbl)
+        return box, lay, lbl
+
+    def _form(self) -> QFormLayout:
+        f = QFormLayout()
+        self._forms = [*getattr(self, "_forms", []), f]   # untuk menyamakan lebar label
+        f.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        f.setHorizontalSpacing(16)
+        f.setVerticalSpacing(8)
+        f.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        return f
+
     def _setup_ui(self) -> None:
+        self.setStyleSheet(
+            f"QFrame#formSection {{ background:{theme.SURFACE}; border:1px solid {theme.BORDER};"
+            f" border-radius:8px; }}"
+            f"QFrame#formSection QLabel {{ border:none; background:transparent; }}"
+            f"QLabel#sectionTitle {{ font-size:16px; padding-bottom:2px; }}"
+            f"QPushButton#advToggle {{ text-align:left; font-size:15px; padding:9px 12px;"
+            f" border:1px solid {theme.BORDER_STRONG}; border-radius:8px;"
+            f" background:{theme.SURFACE}; }}"
+            f"QPushButton#advToggle:hover {{ background:{theme.SURFACE_2}; }}")
         self.ed_name = QLineEdit()
-        self.ed_name.setPlaceholderText("mis. Kasir depan")
+        self.ed_name.setPlaceholderText("mis. Kamera Kasir Depan")
         self.cbo_kind = QComboBox()
         self.cbo_kind.addItems(["Kamera IP (RTSP)", "File video", "Webcam"])
         self.cbo_kind.currentIndexChanged.connect(self._on_kind_changed)
@@ -168,63 +197,99 @@ class AddCameraDialog(QDialog):
             self.cbo_module.addItem(f"{label}  ({mid})" + ("" if info.valid else " — tidak valid"),
                                     mid)
         self.cbo_module.setCurrentIndex(max(0, self.cbo_module.findData(DEFAULT_MODULE)))
+        # nama modul panjang tidak boleh melebarkan dialog (isi lalu terpotong di kiri)
+        self.cbo_module.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cbo_module.setMinimumContentsLength(18)
         self.cbo_module.currentIndexChanged.connect(self._on_module_changed)
         self.params_form = ModuleParamsForm()
 
         self.ed_location = QLineEdit()
-        self.ed_location.setPlaceholderText("opsional, mis. Indoor / Lantai 2 / Pintu depan")
+        self.ed_location.setPlaceholderText("opsional, mis. Lantai 1 / Dekat Kasir")
 
-        head = QFormLayout()
+        # 1. Informasi Dasar
+        sec_info, li, _ = self._section("Informasi Dasar")
+        head = self._form()
         head.addRow("Nama", self.ed_name)
         head.addRow("Lokasi", self.ed_location)
-        head.addRow("Jenis sumber", self.cbo_kind)
-        head.addRow("Modul analitik", self.cbo_module)
+        head.addRow("Jenis Kamera / Sumber", self.cbo_kind)
+        li.addLayout(head)
 
+        # dibuat sebelum halaman sumber: isian sumber langsung memperbarui URL
         self.lbl_url = QLabel("—")
         self.lbl_url.setWordWrap(True)
         self.lbl_url.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.lbl_url.setStyleSheet(f"font-family:monospace; color:{theme.MUTED};")
-
+        self.lbl_url.setToolTip("URL sumber (password tidak pernah ditampilkan)")
+        # 2. Koneksi & Jaringan (isi berganti sesuai jenis sumber)
         self.stack = QStackedWidget()
         self.stack.addWidget(self._page_ip())
         self.stack.addWidget(self._page_file())
         self.stack.addWidget(self._page_webcam())
+        sec_conn, lc, self.lbl_conn_title = self._section("Koneksi & Jaringan")
+        lc.addWidget(self.stack)
 
+        # 3. Uji Koneksi
         self.btn_test = QPushButton("Tes Koneksi")
+        self.btn_test.setMinimumWidth(150)
         self.btn_test.clicked.connect(self._on_test)
+        self.lbl_result_icon = QLabel()
         self.lbl_result = QLabel("Belum diuji.")
         self.lbl_result.setWordWrap(True)
+        self.lbl_result.setStyleSheet(f"color:{theme.MUTED};")
         self.lbl_snapshot = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.lbl_snapshot.setFixedHeight(200)
-        self.lbl_snapshot.setStyleSheet("background:#111; color:#888;")
-        self.lbl_snapshot.setText("snapshot muncul di sini")
+        self.lbl_snapshot.setStyleSheet("background:#111; border-radius:6px;")
+        self.lbl_snapshot.hide()                   # muncul setelah tes berhasil
+        sec_test, lt, _ = self._section("Uji Koneksi")
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.addWidget(self.btn_test)
+        row.addWidget(self.lbl_result_icon)
+        row.addWidget(self.lbl_result, 1)
+        lt.addLayout(row)
+        lt.addWidget(self.lbl_url)
+        lt.addWidget(self.lbl_snapshot)
 
-        test_box = QGroupBox("Tes koneksi")
-        tl = QVBoxLayout(test_box)
-        tl.addWidget(QLabel("URL sumber:"))
-        tl.addWidget(self.lbl_url)
-        tl.addWidget(self.btn_test)
-        tl.addWidget(self.lbl_result)
-        tl.addWidget(self.lbl_snapshot)
-
-        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save
-                                        | QDialogButtonBox.StandardButton.Cancel)
-        self.buttons.button(QDialogButtonBox.StandardButton.Save).setText("Simpan")
-        self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Batal")
-        self.buttons.accepted.connect(self._on_save)
-        self.buttons.rejected.connect(self.reject)
-
-        params_box = QGroupBox("Parameter modul")
-        QVBoxLayout(params_box).addWidget(self.params_form)
+        # 4. Pengaturan Lanjutan (lipat): modul analitik + parameternya
+        self.btn_adv = QPushButton("Pengaturan Lanjutan (Opsional)", objectName="advToggle")
+        self.btn_adv.setCheckable(True)
+        self.btn_adv.setLayoutDirection(Qt.LayoutDirection.RightToLeft)   # ikon panah di kanan
+        self.btn_adv.toggled.connect(self._toggle_advanced)
+        self.adv = QFrame(objectName="formSection")
+        la = QVBoxLayout(self.adv)
+        la.setContentsMargins(14, 10, 14, 12)
+        fa = self._form()
+        fa.addRow("Modul analitik", self.cbo_module)
+        la.addLayout(fa)
+        lbl_params = QLabel("Parameter modul")
+        lbl_params.setStyleSheet(f"color:{theme.MUTED};")
+        la.addWidget(lbl_params)
+        la.addWidget(self.params_form)
+        self._toggle_advanced(False)
         self._on_module_changed()
+
+        # Batal lalu Simpan (biru) di kanan, seperti desain
+        self.btn_cancel = QPushButton("Batal")
+        self.btn_cancel.setMinimumWidth(80)
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_save = QPushButton("Simpan")
+        self.btn_save.setObjectName("primary")
+        self.btn_save.setMinimumWidth(96)
+        self.btn_save.setDefault(True)
+        self.btn_save.clicked.connect(self._on_save)
+        self.buttons = QHBoxLayout()
+        self.buttons.addStretch()
+        self.buttons.addWidget(self.btn_cancel)
+        self.buttons.addWidget(self.btn_save)
 
         # isi formulir bisa digulir; tombol Simpan/Batal tetap terlihat di bawah
         content = QWidget()
         body = QVBoxLayout(content)
-        body.addLayout(head)
-        body.addWidget(self.stack)
-        body.addWidget(params_box)
-        body.addWidget(test_box)
+        body.setContentsMargins(4, 4, 4, 4)
+        body.setSpacing(14)
+        for w in (sec_info, sec_conn, sec_test, self.btn_adv, self.adv):
+            body.addWidget(w)
         body.addStretch()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -233,8 +298,55 @@ class AddCameraDialog(QDialog):
         scroll.setWidget(content)
 
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
         lay.addWidget(scroll, 1)
-        lay.addWidget(self.buttons)
+        lay.addLayout(self.buttons)
+        self._content = content
+        self._align_labels()
+
+    def _align_labels(self) -> None:
+        """Lebar kolom label sama di semua bagian, jadi kolom isian berbaris lurus."""
+        labels = [f.itemAt(r, QFormLayout.ItemRole.LabelRole).widget()
+                  for f in self._forms for r in range(f.rowCount())
+                  if f.itemAt(r, QFormLayout.ItemRole.LabelRole) is not None]
+        labels = [w for w in labels if w is not None]
+        width = max((w.sizeHint().width() for w in labels), default=0)
+        for w in labels:
+            w.setMinimumWidth(width)
+
+    def _toggle_advanced(self, on: bool) -> None:
+        self.adv.setVisible(on)
+        self.btn_adv.setIcon(icon("chevron" if on else "chevron_r", theme.TEXT))
+        if on and hasattr(self, "_content"):       # perbesar dialog bila layar cukup, lalu
+            QTimer.singleShot(0, self._grow_for_advanced)   # gulir ke isian lanjutan
+
+    def _grow_for_advanced(self) -> None:
+        screen = self.screen() or QApplication.primaryScreen()
+        max_h = int(screen.availableGeometry().height() * 0.85) if screen else 720
+        need = self._content.sizeHint().height() + 120
+        if need > self.height():
+            self.resize(self.width(), min(need, max_h))
+        self._scroll_to(self.adv)
+
+    def _scroll_to(self, w: QWidget) -> None:
+        """Gulir VERTIKAL saja (ensureWidgetVisible juga menggeser ke samping)."""
+        sa = self.findChild(QScrollArea)
+        if sa is None:
+            return
+        bar = sa.verticalScrollBar()
+        bottom = w.mapTo(self._content, w.rect().bottomLeft()).y()
+        if bottom > bar.value() + sa.viewport().height():
+            bar.setValue(min(bar.maximum(), bottom - sa.viewport().height() + 12))
+        sa.horizontalScrollBar().setValue(0)
+
+    def _set_result(self, text: str, state: str = "") -> None:
+        """state: ok / warn / bad / "" (netral). Ikon centang/silang seperti desain."""
+        color = {"ok": theme.OK, "warn": theme.WARN, "bad": theme.BAD}.get(state, theme.MUTED)
+        ico = {"ok": "check_circle", "warn": "warning", "bad": "x_circle"}.get(state)
+        self.lbl_result_icon.setPixmap(icon(ico, color).pixmap(18, 18) if ico else QPixmap())
+        self.lbl_result_icon.setVisible(bool(ico))
+        self.lbl_result.setStyleSheet(f"color:{color};")
+        self.lbl_result.setText(text)
 
     def _manifest(self):
         info = self.manager.modules.get(self.cbo_module.currentData())
@@ -251,7 +363,7 @@ class AddCameraDialog(QDialog):
 
         self.ed_host = QLineEdit()
         self.ed_host.setPlaceholderText("192.168.1.50")
-        self.btn_find = QPushButton("Cari di jaringan…")
+        self.btn_find = QPushButton("Cari di Jaringan…")
         self.btn_find.clicked.connect(self._on_find)
         host_row = QHBoxLayout()
         host_row.addWidget(self.ed_host, 1)
@@ -286,7 +398,9 @@ class AddCameraDialog(QDialog):
         self.cbo_stream.currentIndexChanged.connect(self._refresh_url)
 
         page = QWidget()
-        form = QFormLayout(page)
+        form = self._form()
+        page.setLayout(form)
+        form.setContentsMargins(0, 0, 0, 0)
         form.addRow("Merek", self.cbo_brand)
         form.addRow("Alamat IP", host_w)
         form.addRow("Port", self.spin_port)
@@ -314,7 +428,9 @@ class AddCameraDialog(QDialog):
         row_w.setLayout(row)
 
         page = QWidget()
-        form = QFormLayout(page)
+        form = self._form()
+        page.setLayout(form)
+        form.setContentsMargins(0, 0, 0, 0)
         form.addRow("Berkas video", row_w)
         form.addRow(QLabel("Video YouTube: unduh dulu dengan yt-dlp (Fase 2), "
                            "lalu pilih berkasnya di sini."))
@@ -325,13 +441,16 @@ class AddCameraDialog(QDialog):
         self.spin_cam.setRange(0, 9)
         self.spin_cam.valueChanged.connect(self._refresh_url)
         page = QWidget()
-        form = QFormLayout(page)
+        form = self._form()
+        page.setLayout(form)
+        form.setContentsMargins(0, 0, 0, 0)
         form.addRow("Indeks perangkat", self.spin_cam)
         return page
 
     # ------------------------------------------------------- keadaan formulir
     def _on_kind_changed(self, idx: int) -> None:
         self.stack.setCurrentIndex(idx)
+        self.lbl_conn_title.setText(("Koneksi & Jaringan", "Sumber Video", "Webcam")[idx])
         self._refresh_url()
 
     def _on_brand_changed(self) -> None:
@@ -382,18 +501,22 @@ class AddCameraDialog(QDialog):
 
     def _refresh_url(self) -> None:
         uri = self._uri()
-        self.lbl_url.setText(mask(uri) if uri else "—")      # password tidak pernah tampil
+        cam = self._config()
+        if cam.brand not in ("file", "webcam", "custom") and not cam.host:
+            uri = ""                               # IP belum diisi: jangan tampilkan rtsp://:554/…
+        shown = mask(uri).replace("://:@", "://").replace("://:****@", "://") if uri else "—"
+        self.lbl_url.setText(shown)                # password tidak pernah tampil
 
     # ------------------------------------------------------------ tes koneksi
     def _on_test(self) -> None:
         uri = self._uri()
         if not uri:
-            self.lbl_result.setText("Lengkapi dulu alamat sumbernya.")
+            self._set_result("Lengkapi dulu alamat sumbernya.", "warn")
             return
         self._testing = True
         self.btn_test.setEnabled(False)
-        self.lbl_result.setStyleSheet("")
-        self.lbl_result.setText("Menguji…")
+        self.lbl_snapshot.hide()
+        self._set_result("Menguji…")
         if uri.startswith("rtsp://"):
             run_async(probe, uri, on_done=self._on_probe, on_failed=self._on_test_failed)
         else:                                      # file/webcam: langsung ambil snapshot
@@ -405,13 +528,12 @@ class AddCameraDialog(QDialog):
         if not res.get("ok"):
             self._on_test_failed(friendly_error(res.get("error", "")))
             return
-        info = (f"Terhubung — {res['codec'].upper()} {res['width']}×{res['height']}"
+        info = (f"Koneksi berhasil — {res['codec'].upper()} {res['width']}×{res['height']}"
                 f" @ {res['fps']} fps")
         self._grab(self._uri(), info)
 
     def _grab(self, uri: str, info: str) -> None:
-        self.lbl_result.setStyleSheet(f"color:{theme.OK};")
-        self.lbl_result.setText(f"{info} — mengambil snapshot…")
+        self._set_result(f"{info} — mengambil snapshot…", "ok")
         run_async(grab_frame, uri, on_done=lambda img: self._on_snapshot(img, info),
                   on_failed=self._on_test_failed)
 
@@ -421,24 +543,22 @@ class AddCameraDialog(QDialog):
         self._testing = False
         self.btn_test.setEnabled(True)
         if img is None:
-            self.lbl_result.setStyleSheet(f"color:{theme.WARN};")
-            self.lbl_result.setText(f"{info}, tetapi snapshot gagal diambil.")
+            self._set_result(f"{info}, tetapi snapshot gagal diambil.", "warn")
             return
         h, w = img.shape[:2]
         pix = QPixmap.fromImage(to_qimage(img)).scaled(
             self.lbl_snapshot.size(), Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation)
         self.lbl_snapshot.setPixmap(pix)
-        self.lbl_result.setStyleSheet(f"color:{theme.OK};")
-        self.lbl_result.setText(f"{info} — snapshot {w}×{h} OK")
+        self.lbl_snapshot.show()
+        self._set_result(f"{info} — snapshot {w}×{h} OK", "ok")
 
     def _on_test_failed(self, msg: str) -> None:
         if not self._alive:
             return
         self._testing = False
         self.btn_test.setEnabled(True)
-        self.lbl_result.setStyleSheet(f"color:{theme.BAD};")
-        self.lbl_result.setText(friendly_error(msg))
+        self._set_result(friendly_error(msg), "bad")
 
     # ----------------------------------------------------------------- simpan
     def _validate(self, cam: CameraConfig) -> str:
@@ -524,11 +644,12 @@ class AddCameraDialog(QDialog):
             self.spin_channel.setValue(cam.channel or 1)
 
     def _fit_to_screen(self) -> None:
-        """Tinggi dialog maks. ±85% layar; selebihnya digulir (formulir panjang di layar kecil)."""
+        """Tinggi = isi formulir, maks. ±85% layar; selebihnya digulir (layar kecil)."""
         screen = (self.parent().screen() if self.parent() else None) or QApplication.primaryScreen()
         avail = screen.availableGeometry() if screen else None
         h = int(avail.height() * 0.85) if avail else 720
-        self.resize(680, min(820, h))
+        need = self._content.sizeHint().height() + 120     # isi + tombol & margin
+        self.resize(580, min(need, h))
 
     def done(self, result: int) -> None:
         self._alive = False                        # task yang masih jalan tidak boleh menyentuh UI

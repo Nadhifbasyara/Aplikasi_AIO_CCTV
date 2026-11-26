@@ -1,15 +1,16 @@
 """Tile kamera di Live View + panel "Info stream".
 
-Mengikuti pola VMS pada umumnya: tile hanya menampilkan ringkasan 2 baris (info stream kamera
-dan analitik) plus peringatan yang muncul HANYA bila ada masalah; rincian lengkap ada di panel
-Info stream (tombol ⓘ). Waktu per tahap (deteksi/modul) tetap tercatat untuk benchmark, tetapi
+Video dalam kartu bersudut; di atasnya overlay nama kamera, peringatan (HANYA bila ada masalah),
+dan kartu KPI metrik modul. Di bawah video: resolusi | FPS kamera, tombol perbesar, ⓘ, start/stop.
+Rincian lengkap ada di panel Info stream (tombol ⓘ). Waktu per tahap (deteksi/modul) tetap tercatat untuk benchmark, tetapi
 hanya tampil di bagian "Teknis" panel.
 """
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QColor, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QDialog,
     QFormLayout,
+    QGraphicsDropShadowEffect,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -174,66 +175,174 @@ class StreamInfoDialog(QDialog):
 
 
 # ---------------------------------------------------------------- tile
+class VideoView(QLabel):
+    """Area video + overlay: nama kamera (kiri atas), peringatan (kanan atas), dan kartu KPI
+    metrik modul (kiri bawah). Overlay ikut berpindah saat ukuran tile berubah."""
+
+    KPI_STYLES = (
+        # kartu pertama menonjol (hijau bercahaya), sisanya gelap — seperti desain Live
+        ("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #1FA971, stop:1 #2ECC8F);"
+         "border:2px solid #7DF5C4; color:white;"),
+        "background:#262A2E; border:2px solid #5A6068; color:white;",
+    )
+
+    def __init__(self):
+        super().__init__(alignment=Qt.AlignmentFlag.AlignCenter)
+        self.setObjectName("videoView")
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.setMinimumHeight(180)
+        self.setStyleSheet("QLabel#videoView { background:#111316; color:#888;"
+                           " border:1px solid #3A3F45; border-radius:10px; }")
+        self.name_chip = QLabel(self)
+        self.name_chip.setStyleSheet("background:rgba(0,0,0,150); color:white; border-radius:5px;"
+                                     " padding:3px 9px;")
+        self.warn_chip = QLabel(self)
+        self.warn_chip.setWordWrap(True)
+        self.warn_chip.setStyleSheet("background:rgba(255,167,38,225); color:#1B1B1B;"
+                                     " border-radius:5px; padding:3px 9px; font-weight:bold;")
+        self.warn_chip.hide()
+        self.kpi_box = QWidget(self)
+        self.kpi_lay = QVBoxLayout(self.kpi_box)
+        self.kpi_lay.setContentsMargins(0, 0, 0, 0)
+        self.kpi_lay.setSpacing(10)
+        self.kpis: list[QLabel] = []
+
+    def set_name(self, html: str) -> None:
+        self.name_chip.setText(html)
+        self.name_chip.adjustSize()
+        self._place()
+
+    def set_warning(self, text: str, color: str = theme.WARN) -> None:
+        self.warn_chip.setText(text)
+        self.warn_chip.setStyleSheet(f"background:{color}; color:#1B1B1B; border-radius:5px;"
+                                     f" padding:3px 9px; font-weight:bold;")
+        self.warn_chip.setVisible(bool(text))
+        self._place()
+
+    def set_kpis(self, items: list[tuple[str, str]]) -> None:
+        while len(self.kpis) < len(items):
+            card = QLabel()
+            card.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            if not self.kpis:                       # cahaya hijau hanya kartu pertama
+                glow = QGraphicsDropShadowEffect(card)
+                glow.setBlurRadius(28)
+                glow.setOffset(0, 0)
+                glow.setColor(QColor(46, 204, 143, 170))
+                card.setGraphicsEffect(glow)
+            self.kpi_lay.addWidget(card)
+            self.kpis.append(card)
+        fs = max(10, min(17, self.width() // 55))   # tile kecil (grid 3x3) → huruf kecil
+        for i, card in enumerate(self.kpis):
+            if i < len(items):
+                label, value = items[i]
+                card.setText(f"{label.upper()}: {value}")
+                card.setStyleSheet(self.KPI_STYLES[min(i, 1)] +
+                                   f"border-radius:9px; padding:{fs // 2}px {fs + 6}px;"
+                                   f" font-size:{fs}px; font-weight:bold;")
+                card.show()
+            else:
+                card.hide()
+        self.kpi_box.adjustSize()
+        self._place()
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self._place()
+
+    def _place(self) -> None:
+        m = 12
+        self.name_chip.move(m, m)
+        if self.warn_chip.isVisible():
+            self.warn_chip.setMaximumWidth(max(120, self.width() // 2))
+            self.warn_chip.adjustSize()
+            self.warn_chip.move(self.width() - self.warn_chip.width() - m, m)
+        self.kpi_box.adjustSize()
+        self.kpi_box.move(m, self.height() - self.kpi_box.height() - m)
+
+
+def kpi_items(s: dict, limit: int = 2) -> list[tuple[str, str]]:
+    """Metrik tingkat kamera dari modul → kartu KPI. Nilai tanpa satuan, mis. ("Orang", "3")."""
+    out = []
+    for label, value in list((s.get("metrics") or {}).items())[:limit]:
+        out.append((label, str(value).split(" ")[0]))
+    return out
+
+
 class VideoTile(QWidget):
     toggle_requested = pyqtSignal(str)             # cam_id: minta start/stop
+    focus_requested = pyqtSignal(str)              # cam_id: tampilkan kamera ini saja
 
     def __init__(self, cam_id: str, title: str):
         super().__init__()
         self.cam_id = cam_id
         self.title = title
+        self._state = "stopped"
         self._stats: dict | None = None
         self._dialog: StreamInfoDialog | None = None
-        self.header = QLabel(title)
-        self.btn_info = QToolButton()
-        self.btn_info.setAutoRaise(True)
-        self.btn_info.setText("ⓘ")
-        self.btn_info.setToolTip("Info stream")
-        self.btn_info.clicked.connect(self.show_info)
-        self.btn_toggle = QToolButton()
-        self.btn_toggle.setAutoRaise(True)
-        self.btn_toggle.clicked.connect(lambda: self.toggle_requested.emit(self.cam_id))
-        self.view = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
-        self.view.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.view.setMinimumHeight(180)
-        self.view.setStyleSheet("background:#111; color:#888;")
-        self.footer = QLabel("—")
-        self.footer.setWordWrap(True)
-        self.warn = QLabel()
-        self.warn.setWordWrap(True)
-        self.warn.setStyleSheet(f"color:{theme.WARN};")
-        self.warn.hide()
+        self.view = VideoView()
 
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.addWidget(self.header, 1)
-        top.addWidget(self.btn_info)
-        top.addWidget(self.btn_toggle)
+        def tool(text: str, tip: str) -> QToolButton:
+            b = QToolButton()
+            b.setAutoRaise(True)
+            b.setText(text)
+            b.setToolTip(tip)
+            return b
+
+        self.btn_focus = tool("⛶", "Perbesar kamera ini")
+        self.btn_focus.clicked.connect(lambda: self.focus_requested.emit(self.cam_id))
+        self.btn_info = tool("ⓘ", "Info stream")
+        self.btn_info.clicked.connect(self.show_info)
+        self.btn_toggle = tool("▶", "Jalankan kamera")
+        self.btn_toggle.clicked.connect(lambda: self.toggle_requested.emit(self.cam_id))
+        self.info = QLabel("—")
+        self.info.setStyleSheet(f"color:{theme.MUTED};")
+
+        # tombol ⛶ rata dengan garis kiri kartu video (tanpa jarak/padding tambahan)
+        self.btn_focus.setStyleSheet("QToolButton { padding:0px; margin:0px; }")
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 2, 0)
+        row.setSpacing(8)
+        row.addWidget(self.btn_focus)
+        row.addWidget(self.info, 1)
+        row.addWidget(self.btn_info)
+        row.addWidget(self.btn_toggle)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
-        lay.addLayout(top)
-        for w in (self.view, self.footer, self.warn):
-            lay.addWidget(w)
-        lay.setStretch(1, 1)
+        lay.setSpacing(4)
+        lay.addWidget(self.view, 1)
+        lay.addLayout(row)
+        self.set_title(title)
         self.set_running(False)
         self.set_idle()
 
-    def _paint_header(self, state: str) -> None:
-        color = STATE_COLOR.get(state, "#757575")
-        self.header.setStyleSheet(f"border-left:6px solid {color}; padding-left:6px;")
-        self.header.setToolTip(STATE_LABEL.get(state, state))
+    # ---------------------------------------------------------------- tampilan
+    def set_title(self, title: str) -> None:
+        self.title = title
+        self._paint_name()
+
+    def _paint_name(self) -> None:
+        color = STATE_COLOR.get(self._state, "#757575")
+        self.view.set_name(f"<span style='color:{color}'>●</span>&nbsp;{self.title}")
+        self.view.name_chip.setToolTip(STATE_LABEL.get(self._state, self._state))
+
+    def set_focused(self, focused: bool) -> None:
+        self.btn_focus.setText("⊞" if focused else "⛶")
+        self.btn_focus.setToolTip("Kembali ke grid" if focused else "Perbesar kamera ini")
 
     def set_running(self, running: bool) -> None:
         self.btn_toggle.setText("■" if running else "▶")
         self.btn_toggle.setToolTip("Hentikan kamera" if running else "Jalankan kamera")
 
     def set_idle(self) -> None:
-        self._paint_header("stopped")
+        self._state = "stopped"
+        self._paint_name()
         self.view.setPixmap(QPixmap())
         self.view.setText("berhenti")
-        self.footer.setStyleSheet("")
-        self.footer.setText("—")
-        self.footer.setToolTip("")
-        self.warn.hide()
+        self.view.set_kpis([])
+        self.view.set_warning("")
+        self.info.setStyleSheet(f"color:{theme.MUTED};")
+        self.info.setText("—")
+        self.info.setToolTip("")
         self._stats = None
         if self._dialog is not None:
             self._dialog.update_stats(None)
@@ -245,21 +354,24 @@ class VideoTile(QWidget):
 
     def set_stats(self, s: dict) -> None:
         self._stats = s
-        self._paint_header(s["state"])
-        self.footer.setStyleSheet("")
-        self.footer.setText("\n".join(summary_lines(s)))
-        self.footer.setToolTip("Klik ⓘ untuk rincian stream")
-        warns = warnings(s)
-        self.warn.setText("\n".join(f"⚠ {w}" for w in warns))
-        self.warn.setVisible(bool(warns))
+        self._state = s["state"]
+        self._paint_name()
+        w, h = s.get("source_resolution") or s.get("resolution") or (0, 0)
+        self.info.setStyleSheet(f"color:{theme.MUTED};")
+        self.info.setText(f"{w}x{h} | {s.get('stream_fps', 0.0):.0f} FPS" if w else "—")
+        self.info.setToolTip("\n".join(summary_lines(s)) + "\n\nKlik ⓘ untuk rincian stream")
+        self.view.set_kpis(kpi_items(s))
+        self.view.set_warning(" · ".join(f"⚠ {w}" for w in warnings(s)))
         if self._dialog is not None and self._dialog.isVisible():
             self._dialog.update_stats(s)
 
     def set_error(self, msg: str) -> None:
-        self._paint_header("reconnecting")
-        self.footer.setStyleSheet(f"color:{theme.BAD};")
-        self.footer.setText(msg)
-        self.footer.setToolTip(msg)
+        self._state = "reconnecting"
+        self._paint_name()
+        self.info.setStyleSheet(f"color:{theme.BAD};")
+        self.info.setText(msg)
+        self.info.setToolTip(msg)
+        self.view.set_warning(f"⚠ {msg}", "rgba(239,83,80,230)")
 
     def show_info(self) -> None:
         if self._dialog is None:

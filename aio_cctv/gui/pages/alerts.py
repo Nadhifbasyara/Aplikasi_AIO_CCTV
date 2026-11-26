@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -34,7 +35,6 @@ from aio_cctv.gui.icons import icon
 from aio_cctv.gui.workers.net_tasks import run_async
 from aio_cctv.storage import queries as q
 
-RANGES = [("Hari ini", 1), ("7 hari", 7), ("30 hari", 30), ("90 hari", 90)]
 ALL_ZONES = "(semua zona / tingkat kamera)"
 SEVERITY_PILL = {"info": "blue", "warning": "orange", "critical": "red"}
 SEVERITY_LABEL = {"info": "Info", "warning": "Warning", "critical": "Critical"}
@@ -101,8 +101,32 @@ def _rule_row(r: dict) -> QWidget:
     return w
 
 
+HISTORY_RANGES = [("Hari ini", 1), ("7 Hari terakhir", 7), ("30 Hari terakhir", 30),
+                  ("90 Hari terakhir", 90)]
+SEV_ICON = {"critical": "x_circle", "warning": "warning", "info": "alert_circle"}
+COL_TIME, COL_CAM, COL_RULE, COL_SEV, COL_MSG, COL_ACT, COL_STATUS = range(7)
+UNREAD_BG = QColor(30, 136, 229, 34)              # baris belum dibaca: rona biru (menonjol)
+
+
+def _cell(*widgets, center: bool = False) -> QWidget:
+    """Wadah sel tabel: widget berjajar, tegak di tengah."""
+    w = QWidget()
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(6, 0, 6, 0)
+    lay.setSpacing(6)
+    if center:
+        lay.addStretch()
+    for x in widgets:
+        # pill & tombol setinggi isinya (tidak melar setinggi baris)
+        x.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        lay.addWidget(x, 0, Qt.AlignmentFlag.AlignVCenter)
+    lay.addStretch()
+    return w
+
+
 class AlertHistory(QWidget):
     unread_changed = pyqtSignal(int)
+    live_requested = pyqtSignal(str)              # cam_id: tombol "Cek Kamera"
 
     def __init__(self, manager):
         super().__init__()
@@ -110,12 +134,16 @@ class AlertHistory(QWidget):
         self.rows: list[dict] = []
         self.cbo_cam = QComboBox()
         self.cbo_range = QComboBox()
-        for label, days in RANGES:
+        for label, days in HISTORY_RANGES:
             self.cbo_range.addItem(label, days)
         self.cbo_range.setCurrentIndex(1)
         self.chk_unread = QCheckBox("Hanya yang belum dibaca")
+        self.lbl_count = QLabel()
+        self.lbl_count.setStyleSheet(f"color:{theme.MUTED}; padding-left:10px;"
+                                     f" border-left:1px solid {theme.BORDER_STRONG};")
         self.btn_ack = _btn("Tandai dibaca", "check")
-        self.btn_ack_all = _btn("Tandai semua dibaca", "check_circle", "primary", "#FFFFFF")
+        self.btn_ack.setToolTip("Tandai baris yang dipilih sebagai sudah dibaca")
+        self.btn_ack_all = _btn("Tandai semua dibaca", "check", "primary", "#FFFFFF")
         for w in (self.cbo_cam, self.cbo_range):
             w.currentIndexChanged.connect(self.refresh)
         self.chk_unread.toggled.connect(self.refresh)
@@ -124,22 +152,41 @@ class AlertHistory(QWidget):
 
         bar = QHBoxLayout()
         for w in (QLabel("Kamera:"), self.cbo_cam, QLabel("Rentang:"), self.cbo_range,
-                  self.chk_unread):
+                  self.chk_unread, self.lbl_count):
             bar.addWidget(w)
         bar.addStretch()
         bar.addWidget(self.btn_ack)
         bar.addWidget(self.btn_ack_all)
 
-        self.table = QTableWidget(0, 6)
+        title = QLabel("Riwayat Alert")
+        title.setStyleSheet("font-size:20px; font-weight:bold; padding-top:6px;")
+
+        self.table = QTableWidget(0, 7)
+        self.table.setObjectName("alertTable")
         self.table.setHorizontalHeaderLabels(["Waktu", "Kamera", "Aturan", "Tingkat", "Pesan",
-                                              "Status"])
+                                              "Aksi Pintas", "Status"])
+        self.table.horizontalHeaderItem(COL_ACT).setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.table.horizontalHeaderItem(COL_STATUS).setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setShowGrid(True)                  # garis pemisah baris (lewat gridline-color)
+        self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setDefaultSectionSize(46)
+        self.table.setStyleSheet(
+            # tanpa aturan ::item biasa: aturan itu membuat warna latar per baris (belum dibaca)
+            # diabaikan Qt
+            f"QTableWidget#alertTable {{ border:1px solid {theme.BORDER}; border-radius:6px;"
+            f" gridline-color:{theme.BORDER}; }}"
+            f"QTableWidget#alertTable::item:selected {{ background:rgba(30,136,229,0.30); }}"
+            f"QHeaderView::section {{ font-weight:bold; padding:8px 6px; }}")
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(COL_MSG, QHeaderView.ResizeMode.Stretch)
+        hh.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         lay = QVBoxLayout(self)
         lay.addLayout(bar)
+        lay.addWidget(title)
         lay.addWidget(self.table, 1)
         self.reload_cameras()
 
@@ -147,7 +194,7 @@ class AlertHistory(QWidget):
         current = self.cbo_cam.currentData()
         self.cbo_cam.blockSignals(True)
         self.cbo_cam.clear()
-        self.cbo_cam.addItem("Semua kamera", None)
+        self.cbo_cam.addItem("Semua Kamera", None)
         for cam in sorted(self.manager.cameras.values(), key=lambda c: c.name.lower()):
             self.cbo_cam.addItem(cam.name, cam.id)
         self.cbo_cam.setCurrentIndex(max(0, self.cbo_cam.findData(current)))
@@ -164,25 +211,55 @@ class AlertHistory(QWidget):
     def _show(self, result) -> None:
         self.rows, unread = result
         names = {c.id: c.name for c in self.manager.cameras.values()}
+        self.table.clearContents()
         self.table.setRowCount(len(self.rows))
         for r, a in enumerate(self.rows):
-            vals = [datetime.fromtimestamp(a["ts"]).strftime("%d-%m-%Y %H:%M:%S"),
-                    names.get(a["camera_id"], a["camera_id"]), a["rule_id"], a["severity"],
-                    a["message"], "dibaca" if a["acknowledged"] else "BARU"]
-            for c, v in enumerate(vals):
-                item = QTableWidgetItem(v)
+            new = not a["acknowledged"]
+            fg = QColor(theme.TEXT if new else theme.MUTED)
+            texts = {COL_TIME: datetime.fromtimestamp(a["ts"]).strftime("%d-%m-%Y %H:%M:%S"),
+                     COL_CAM: names.get(a["camera_id"], a["camera_id"]),
+                     COL_MSG: a["message"]}
+            for c in range(7):
+                text = texts.get(c, "")
+                item = QTableWidgetItem(f"  {text}" if text else "")   # jarak dari garis sel
                 item.setData(Qt.ItemDataRole.UserRole, a["id"])
-                if c == 3:
-                    item.setText(SEVERITY_LABEL.get(v, v))
-                    item.setIcon(_dot(_sev_fg(v)))
-                    item.setForeground(QColor(_sev_fg(v)))
-                if c == 5 and not a["acknowledged"]:
-                    f = item.font()
-                    f.setBold(True)
-                    item.setFont(f)
+                item.setForeground(fg)
+                if new:
+                    item.setBackground(UNREAD_BG)
                 self.table.setItem(r, c, item)
+            sev = a["severity"]
+            rule = QLabel(a["rule_id"])
+            rule.setStyleSheet(f"color:{fg.name()}; background:transparent;")
+            ico = QLabel()
+            ico.setPixmap(icon(SEV_ICON.get(sev, "alert"), _sev_fg(sev)).pixmap(15, 15))
+            ico.setStyleSheet("background:transparent;")
+            self.table.setCellWidget(r, COL_RULE, _cell(ico, rule))
+            self.table.setCellWidget(r, COL_SEV, _cell(_pill(SEVERITY_LABEL.get(sev, sev),
+                                                            SEVERITY_PILL.get(sev, "gray"))))
+            if new:
+                cek = _btn("Cek Kamera", "eye")
+                cek.setToolTip("Buka kamera ini di halaman Live")
+                cek.clicked.connect(lambda _=False, cid=a["camera_id"]:
+                                    self.live_requested.emit(cid))
+                done = _btn("Tandai Dibaca", "check")
+                done.clicked.connect(lambda _=False, aid=a["id"]: self._ack_ids([aid]))
+                self.table.setCellWidget(r, COL_ACT, _cell(cek, done, center=True))
+            status = _pill("BARU", "blue") if new else _pill("Dibaca", "gray")
+            if new:
+                status.setStyleSheet("font-weight:bold;")
+            self.table.setCellWidget(r, COL_STATUS, _cell(status, center=True))
         self.table.resizeColumnsToContents()
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(COL_MSG, QHeaderView.ResizeMode.Stretch)
+        # kolom berisi widget: resizeColumnsToContents tidak menghitungnya
+        for col in (COL_RULE, COL_SEV, COL_ACT, COL_STATUS):
+            need = max((self.table.cellWidget(r, col).sizeHint().width()
+                        for r in range(self.table.rowCount()) if self.table.cellWidget(r, col)),
+                       default=0)
+            self.table.setColumnWidth(col, max(self.table.columnWidth(col), need + 8))
+        shown = sum(not a["acknowledged"] for a in self.rows)
+        self.lbl_count.setText(f"Menampilkan {shown} dari {unread} alert belum dibaca")
+        self.btn_ack_all.setEnabled(shown > 0)
         self.unread_changed.emit(unread)
 
     def _ack(self, selected: bool) -> None:
@@ -191,6 +268,9 @@ class AlertHistory(QWidget):
                           for i in self.table.selectedIndexes()})
         else:
             ids = [a["id"] for a in self.rows if not a["acknowledged"]]
+        self._ack_ids(ids)
+
+    def _ack_ids(self, ids: list[int]) -> None:
         if ids:
             q.ack_alerts(self.manager.db_path, ids)
             self.refresh()
@@ -215,8 +295,8 @@ class RuleEditor(QWidget):
         self.btn_add = _btn("Tambah Aturan", "plus", "primary", "#FFFFFF")
         self.btn_del = _btn("Hapus", "trash", "danger", theme.BAD)
         self.btn_default = _btn("Kembalikan Bawaan", "undo")
-        self.btn_save = _btn("Simpan aturan", "save", "primary", "#FFFFFF")
-        self.btn_save.setMinimumHeight(34)
+        self.btn_save = _btn("Simpan Perubahan Aturan", "save", "primary", "#FFFFFF")
+        self.btn_save.setMinimumHeight(38)
         self.btn_add.clicked.connect(self._add)
         self.btn_del.clicked.connect(self._delete)
         self.btn_default.clicked.connect(self._defaults)
@@ -246,18 +326,32 @@ class RuleEditor(QWidget):
         self.cbo_sev.currentIndexChanged.connect(self._color_severity)
         self.ed_msg = QPlainTextEdit()
         self.ed_msg.setPlaceholderText("kosong = deskripsi otomatis")
-        self.ed_msg.setFixedHeight(68)
+        self.ed_msg.setMinimumHeight(90)
+        self.ed_msg.setMaximumHeight(130)
+
+        switch_row = QWidget()
+        sr = QHBoxLayout(switch_row)
+        sr.setContentsMargins(0, 0, 0, 0)
+        sr.addStretch()
+        sr.addWidget(QLabel("Aktif"))
+        sr.addWidget(self.chk_enabled)
 
         self.form = QFormLayout()
-        self.form.setVerticalSpacing(9)
+        self.form.setVerticalSpacing(12)
+        self.form.setHorizontalSpacing(18)
         self.form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        for label, w in (("Jenis", self.cbo_type),
-                         ("Metrik / event", self.cbo_target), ("Peran zona", self.cbo_role),
-                         ("Ambang", self.spin_thr), ("Bertahan selama", self.spin_for),
-                         ("Jendela event", self.spin_window), ("Minimal kejadian", self.spin_count),
-                         ("Jeda antar-alert", self.spin_cooldown), ("Tingkat", self.cbo_sev),
-                         ("Pesan", self.ed_msg)):
+        self.form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        for label, w in (("Status Aktif", switch_row), ("Jenis Aturan", self.cbo_type),
+                         ("Metrik / Event", self.cbo_target), ("Peran Zona", self.cbo_role),
+                         ("Ambang", self.spin_thr),
+                         ("Bertahan selama", self._with_unit(self.spin_for)),
+                         ("Jendela event", self._with_unit(self.spin_window)),
+                         ("Minimal kejadian", self.spin_count),
+                         ("Jeda antar-alert", self._with_unit(self.spin_cooldown)),
+                         ("Tingkat Bahaya", self.cbo_sev), ("Pesan Notifikasi", self.ed_msg)):
             self.form.addRow(label, w)
+        self.form.labelForField(self.ed_msg).setAlignment(Qt.AlignmentFlag.AlignLeft
+                                                          | Qt.AlignmentFlag.AlignTop)
         for w in (self.chk_enabled,):
             w.toggled.connect(self._apply)
         for w in (self.cbo_type, self.cbo_target, self.cbo_role, self.cbo_sev):
@@ -270,8 +364,12 @@ class RuleEditor(QWidget):
         list_card = QFrame()
         list_card.setObjectName("card")
         lc = QVBoxLayout(list_card)
-        lc.setContentsMargins(6, 6, 6, 6)
-        lc.addWidget(self.lst)
+        lc.setContentsMargins(12, 12, 12, 8)
+        lc.setSpacing(6)
+        list_title = QLabel("Daftar Aturan")
+        list_title.setObjectName("sectionTitle")
+        lc.addWidget(list_title)
+        lc.addWidget(self.lst, 1)
         left = QVBoxLayout()
         left.addWidget(list_card, 1)
         btns = QHBoxLayout()
@@ -282,15 +380,15 @@ class RuleEditor(QWidget):
         form_card = QFrame()
         form_card.setObjectName("card")
         right = QVBoxLayout(form_card)
-        right.setContentsMargins(14, 10, 14, 14)
-        head = QHBoxLayout()
+        right.setContentsMargins(18, 12, 18, 16)
         self.lbl_rule = QLabel()
         self.lbl_rule.setObjectName("sectionTitle")
-        head.addWidget(self.lbl_rule, 1)
-        head.addWidget(QLabel("Aktif"))
-        head.addWidget(self.chk_enabled)
-        right.addLayout(head)
-        right.addSpacing(4)
+        right.addWidget(self.lbl_rule)
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(f"background:{theme.BORDER}; border:none;")
+        right.addWidget(sep)
+        right.addSpacing(6)
         right.addLayout(self.form)
         right.addStretch()
         right.addWidget(self.btn_save)
@@ -301,16 +399,23 @@ class RuleEditor(QWidget):
         body.addLayout(left, 1)
         body.addWidget(form_card, 1)
         top = QHBoxLayout()
-        top.addWidget(QLabel("Kamera"))
-        top.addWidget(self.cbo_cam, 1)
-        hint = QLabel("Aturan metrik/event dievaluasi tiap frame di thread kamera; aturan kamera "
-                      "offline/modul error/FPS dievaluasi aplikasi tiap 5 detik. Perubahan berlaku "
-                      "setelah disimpan (kamera yang berjalan dijalankan ulang).")
+        cam_lbl = QLabel("Kamera:")
+        cam_lbl.setStyleSheet("font-weight:bold;")
+        top.addWidget(cam_lbl)
+        self.cbo_cam.setMinimumWidth(260)
+        top.addWidget(self.cbo_cam)
+        top.addStretch()
+        hint = QLabel("Pengaturan berlaku otomatis setelah disimpan (kamera yang aktif akan "
+                      "dimulai ulang sebentar).")
+        hint.setToolTip("Aturan metrik/event dievaluasi tiap frame di thread kamera; aturan kamera "
+                        "offline/modul error/FPS dievaluasi aplikasi tiap 5 detik.")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color:{theme.MUTED};")
         lay = QVBoxLayout(self)
+        lay.setSpacing(8)
         lay.addLayout(top)
         lay.addWidget(hint)
+        lay.addSpacing(4)
         lay.addLayout(body, 1)
         self.reload_cameras()
 
@@ -319,8 +424,20 @@ class RuleEditor(QWidget):
         s = QDoubleSpinBox()
         s.setRange(minimum, 86400)
         s.setDecimals(1)
-        s.setSuffix(" detik")
         return s
+
+    @staticmethod
+    def _with_unit(spin: QDoubleSpinBox, unit: str = "detik") -> QWidget:
+        """Spinbox + satuan di luar kotak (seperti mockup: [ 60.0 ] detik)."""
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        lay.addWidget(spin, 1)
+        u = QLabel(unit)
+        u.setStyleSheet(f"color:{theme.MUTED};")
+        lay.addWidget(u)
+        return w
 
     # ------------------------------------------------------------- kamera
     def reload_cameras(self) -> None:
@@ -328,7 +445,8 @@ class RuleEditor(QWidget):
         self.cbo_cam.blockSignals(True)
         self.cbo_cam.clear()
         for cam in sorted(self.manager.cameras.values(), key=lambda c: c.name.lower()):
-            self.cbo_cam.addItem(cam.name, cam.id)
+            loc = (cam.location or "").strip()
+            self.cbo_cam.addItem(f"{cam.name} ({loc})" if loc else cam.name, cam.id)
         self.cbo_cam.setCurrentIndex(max(0, self.cbo_cam.findData(current)))
         self.cbo_cam.blockSignals(False)
         self._load_camera()
@@ -383,8 +501,8 @@ class RuleEditor(QWidget):
             self.form.itemAt(k, QFormLayout.ItemRole.FieldRole).widget().setEnabled(has)
         self.chk_enabled.setEnabled(has)
         self.btn_del.setEnabled(has)
-        self.lbl_rule.setText(f"Ubah Aturan <span style='color:{theme.MUTED};font-weight:normal'>"
-                              f"· id {self.rules[i]['id']}</span>" if has else "Tidak ada aturan")
+        self.lbl_rule.setText(f"Ubah Aturan: <span style='color:{theme.MUTED};font-weight:normal'>"
+                              f"id {self.rules[i]['id']}</span>" if has else "Tidak ada aturan")
         if not has:
             return
         r = Rule.model_validate({**self.rules[i]})
@@ -410,6 +528,8 @@ class RuleEditor(QWidget):
         for w, on in ((self.cbo_target, data), (self.cbo_role, data), (self.spin_thr, uses_thr),
                       (self.spin_window, rtype == "event"), (self.spin_count, rtype == "event")):
             w.setEnabled(on and self.lst.currentRow() >= 0)
+            # isian yang tak dipakai jenis aturan ini disembunyikan (seperti mockup)
+            self.form.setRowVisible(w.parentWidget() if w is self.spin_window else w, on)
 
     def _apply(self, *_args) -> None:
         i = self.lst.currentRow()
@@ -493,6 +613,7 @@ class RuleEditor(QWidget):
 
 class AlertsPage(QWidget):
     unread_changed = pyqtSignal(int)
+    live_requested = pyqtSignal(str)              # cam_id: "Cek Kamera" di riwayat
 
     def __init__(self, manager):
         super().__init__()
@@ -500,6 +621,7 @@ class AlertsPage(QWidget):
         self.history = AlertHistory(manager)
         self.editor = RuleEditor(manager)
         self.history.unread_changed.connect(self.unread_changed)
+        self.history.live_requested.connect(self.live_requested)
         tabs = QTabWidget()
         tabs.addTab(self.history, "Riwayat")
         tabs.addTab(self.editor, "Aturan")

@@ -200,3 +200,16 @@ def test_engine_batch_and_failure_diagnosis():
     from aio_cctv.gui.widgets.video_tile import warnings
     assert warnings({"ds_error": "GPU kehabisan memori"})[0].startswith("DeepStream: GPU")
 
+
+
+def test_live_activity_text_and_kpi_cards():
+    from aio_cctv.gui.widgets.activity_log import describe_event
+    from aio_cctv.gui.widgets.video_tile import kpi_items
+    from aio_cctv.modules.api import Event
+    labels, regions = {"dwell_closed": "Sesi dwell selesai"}, {"z1": "Meja belajar"}
+    assert describe_event(Event("dwell_closed", 1.0, "z1", 3, {"duration_s": 12.4}),
+                          labels, regions) == "Sesi dwell selesai di Meja belajar (12 dtk)"
+    assert describe_event(Event("line_cross", 1.0, None, 3, {"direction": "in"}), {}, {}) \
+        == "Line cross (masuk)"
+    s = {"metrics": {"Orang terlacak": "3 orang", "Total pengunjung": "35 orang", "x": "1"}}
+    assert kpi_items(s) == [("Orang terlacak", "3"), ("Total pengunjung", "35")]

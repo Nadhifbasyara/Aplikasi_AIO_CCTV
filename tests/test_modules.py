@@ -161,3 +161,15 @@ def test_validate_result_flags_contract_violations(tmp_path):
     assert any("JSON" in p for p in problems)
     assert validate_result(m, ModuleResult(sv.Detections.empty(),
                                            metrics=[Metric("hitung", 3, "z1")])) == []
+
+
+def test_only_user_installed_modules_can_be_uninstalled(tmp_path):
+    src = make_module(tmp_path / "src", "hapus-saya")
+    root = tmp_path / "user_modules"
+    info = registry.install(src, dest_root=root)
+    bundled = registry.inspect(BUNDLED_MODULES_DIR / "baseline")
+    assert registry.is_removable(info, root) and not registry.is_removable(bundled, root)
+    with pytest.raises(PermissionError):
+        registry.uninstall(bundled, root)
+    registry.uninstall(info, root)
+    assert not info.path.exists() and (BUNDLED_MODULES_DIR / "baseline").exists()

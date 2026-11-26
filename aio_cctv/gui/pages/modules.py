@@ -3,7 +3,7 @@ import hashlib
 from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import QSize, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -34,7 +34,7 @@ from aio_cctv.modules.check import run_checks
 
 TRUST_NOTE = ("Modul menjalankan kode Python di komputer ini. Pasang hanya paket dari tim "
               "atau sumber yang Anda percaya.")
-CARD_W = 300                                     # lebar kartu; jumlah kolom menyesuaikan layar
+CARD_W = 270                                     # lebar kartu; jumlah kolom menyesuaikan layar
 CONTRACT = "docs/kontrak-modul.md"
 
 
@@ -78,6 +78,14 @@ def _is_bundled(path: Path) -> bool:
         return False
 
 
+def _module_icon(info) -> str:
+    """Ikon kartu: orang untuk modul pengunjung/pegawai, selain itu ikon modul."""
+    m = info.manifest
+    text = " ".join([info.id, m.name if m else ""]).lower()
+    return "user" if any(k in text for k in ("pengunjung", "visitor", "pegawai", "person")) \
+        else "module"
+
+
 class ModuleCard(QFrame):
     clicked = pyqtSignal(str)
 
@@ -90,59 +98,55 @@ class ModuleCard(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         m = info.manifest
         title, subtitle = _split_name(m.name if m else info.path.name)
+        if subtitle:
+            self.setToolTip(f"{m.name if m else title}\nID: {info.id}")
 
         head = QHBoxLayout()
+        head.setSpacing(10)
+        ico = _icon_label(_module_icon(info), "#4FA3F7", 40)
+        head.addWidget(ico, 0, Qt.AlignmentFlag.AlignTop)
+        # judul panjang dipecah manual jadi 2 baris: QLabel wordWrap di dalam HBox sering
+        # salah menghitung tinggi sehingga baris kedua terpotong
+        if len(title) > 11 and " " in title:
+            title = title.replace(" ", "\n", 1)
         t = QLabel(title)
         t.setObjectName("cardTitle")
-        t.setWordWrap(True)
-        head.addWidget(t, 1)
-        if m is not None:
-            head.addWidget(_pill(f"Versi {m.version}", "gray"), 0, Qt.AlignmentFlag.AlignTop)
-        else:
-            head.addWidget(_pill("Rusak", "red"), 0, Qt.AlignmentFlag.AlignTop)
+        t.setStyleSheet("font-size:16px; font-weight:bold;")
+        head.addWidget(t, 1, Qt.AlignmentFlag.AlignTop)
+        ver = _pill(f"Versi {m.version}", "gray") if m is not None else _pill("Rusak", "red")
+        head.addWidget(ver, 0, Qt.AlignmentFlag.AlignTop)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(6)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(7)
         lay.addLayout(head)
-        sub = QLabel(subtitle or f"ID: {info.id}")
-        sub.setStyleSheet(f"color:{theme.MUTED};")
-        sub.setWordWrap(True)
-        lay.addWidget(sub)
-        lay.addSpacing(2)
+        lay.addSpacing(4)
 
-        def row(ico: str, *widgets) -> None:
+        def row(ico_name: str, color: str, *widgets) -> None:
             r = QHBoxLayout()
             r.setSpacing(6)
-            r.addWidget(_icon_label(ico))
+            r.addWidget(_icon_label(ico_name, color))
             for w in widgets:
                 r.addWidget(QLabel(w) if isinstance(w, str) else w)
             r.addStretch()
             lay.addLayout(r)
 
         if m is not None:
-            row("user", "Penulis: " + (", ".join(m.authors) or "-"))
-            row("cpu", f"Model: {Path(m.model.weights).name} "
-                       f"[{', '.join(m.model.classes) or 'semua kelas'}]")
-        row("pin", "Lokasi:", _pill("bawaan" if _is_bundled(info.path) else "terpasang",
-                                    "blue" if _is_bundled(info.path) else "purple"))
-
-        status = QHBoxLayout()
-        status.setSpacing(6)
-        status.addWidget(_icon_label("check_circle", theme.OK if info.valid else theme.BAD))
-        status.addWidget(QLabel("Status:"))
-        status.addWidget(_pill("Valid", "teal") if info.valid else _pill("Tidak valid", "red"))
+            row("user", theme.MUTED, "Penulis: " + (", ".join(m.authors) or "-"))
+        if not info.valid:
+            st, ico_s, col = _pill("Tidak valid", "red"), "x_circle", theme.BAD
+            st.setToolTip("\n".join(info.errors))
+        elif cameras:
+            st, ico_s, col = _pill(f"Aktif ({cameras} Kamera)", "green"), "check_circle", theme.OK
+        else:
+            st, ico_s, col = _pill("Belum Dipakai", "gray"), "clock", theme.MUTED
+        row(ico_s, col, "Status:", st)
         if info.warnings:
-            w = _pill(f"⚠ {len(info.warnings)}", "orange")
+            w = QLabel(f"⚠ {len(info.warnings)} peringatan")
+            w.setStyleSheet(f"color:{theme.WARN};")
             w.setToolTip("\n".join(info.warnings))
-            status.addWidget(w)
-        status.addStretch()
-        cams = QLabel(f"✓ {cameras} kamera" if cameras else "belum dipakai")
-        cams.setStyleSheet(f"color:{theme.MUTED};")
-        status.addWidget(cams)
-        lay.addLayout(status)
-        if info.errors:
-            self.setToolTip("\n".join(info.errors))
+            lay.addWidget(w)
+        lay.addStretch()
 
     def set_selected(self, on: bool) -> None:
         self.setProperty("selected", on)
@@ -162,7 +166,7 @@ class AddCard(QFrame):
         super().__init__()
         self.setObjectName("addCard")
         self.setFixedWidth(CARD_W)
-        self.setMinimumHeight(170)
+        self.setMinimumHeight(120)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         lay = QVBoxLayout(self)
         lay.addStretch()
@@ -218,6 +222,8 @@ class ModulesPage(QWidget):
         self._setup_ui()
         manager.modules_changed.connect(self.refresh)
         manager.cameras_changed.connect(self.refresh)
+        manager.worker_started.connect(lambda _: self._build_overview())
+        manager.worker_stopped.connect(lambda _: self._build_overview())
         self.refresh()
 
     # ------------------------------------------------------------------ UI
@@ -230,16 +236,12 @@ class ModulesPage(QWidget):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             return b
 
-        self.btn_folder = btn("Pasang dari Folder…", "plus")
-        self.btn_zip = btn("Pasang dari ZIP…", "archive")
+        self.btn_install = btn("Pasang Modul Baru", "plus", "primary", "#FFFFFF")
+        self.btn_install.setToolTip("Pasang paket modul dari folder atau ZIP")
+        self.btn_install.clicked.connect(lambda: self._install_menu(self.btn_install))
         self.btn_reload = btn("Muat Ulang", "refresh")
-        self.btn_test = btn("Uji Modul", "flask", "warn", theme.WARN)
-        self.btn_test.setToolTip("Muat bobot & kode modul terpilih lalu jalankan beberapa frame "
-                                 "(uji kepatuhan kontrak)")
-        self.btn_folder.clicked.connect(lambda: self._install(zip_file=False))
-        self.btn_zip.clicked.connect(lambda: self._install(zip_file=True))
+        self.btn_reload.setToolTip("Pindai ulang folder modul")
         self.btn_reload.clicked.connect(self.manager.reload_modules)
-        self.btn_test.clicked.connect(self._test)
         self.ed_search = QLineEdit()
         self.ed_search.setObjectName("search")
         self.ed_search.setPlaceholderText("Cari modul…")
@@ -248,43 +250,77 @@ class ModulesPage(QWidget):
         self.ed_search.textChanged.connect(self._relayout)
 
         bar = QHBoxLayout()
-        for b in (self.btn_folder, self.btn_zip, self.btn_reload, self.btn_test):
-            bar.addWidget(b)
-        bar.addStretch()
-        bar.addWidget(self.ed_search)
+        bar.addWidget(self.btn_install)
+        bar.addWidget(self.btn_reload)
+        bar.addWidget(self.ed_search, 1)
 
         self.grid_host = QWidget()
         self.grid = QGridLayout(self.grid_host)
         self.grid.setContentsMargins(0, 4, 0, 0)
         self.grid.setSpacing(14)
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.overview = QVBoxLayout()              # ringkasan & pemakaian modul
+        self.overview.setSpacing(12)
+        left_host = QWidget()
+        lh = QVBoxLayout(left_host)
+        lh.setContentsMargins(0, 0, 6, 0)
+        lh.setSpacing(18)
+        lh.addWidget(self.grid_host)
+        lh.addLayout(self.overview)
+        lh.addStretch()
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setWidget(self.grid_host)
+        self.scroll.setWidget(left_host)
         self.add_card = AddCard()
-        self.add_card.clicked.connect(self._install_menu)
+        self.add_card.clicked.connect(lambda: self._install_menu(self.add_card))
 
         left = QVBoxLayout()
         left.addLayout(bar)
         left.addWidget(self.scroll, 1)
 
-        # panel rincian (kanan)
+        # panel rincian (kanan): judul + dua kolom
+        self.btn_test = btn("Uji Modul", "play", "primary", "#FFFFFF")
+        self.btn_test.setToolTip("Muat bobot & kode modul terpilih lalu jalankan beberapa frame "
+                                 "(uji kepatuhan kontrak)")
+        self.btn_test.clicked.connect(self._test)
+        self.btn_remove = btn("Hapus Modul", "trash", "danger", theme.BAD)
+        self.btn_remove.clicked.connect(self._uninstall)
+        self.lbl_detail_title = QLabel("Rincian Modul")
+        self.lbl_detail_title.setObjectName("pageTitle")
+        self.lbl_detail_title.setWordWrap(True)
+
+        self.col_a = QVBoxLayout()                 # informasi, lokasi, kamera, teknis
+        self.col_a.setSpacing(10)
+        self.col_b = QVBoxLayout()                 # aksi, folder, hasil uji
+        self.col_b.setSpacing(10)
+        actions = QHBoxLayout()
+        actions.addWidget(self.btn_test)
+        actions.addWidget(self.btn_remove)
+        self.col_b_dyn = QVBoxLayout()
+        self.col_b_dyn.setSpacing(10)
+        self.col_b.addLayout(actions)
+        self.col_b.addLayout(self.col_b_dyn, 1)
+        cols = QHBoxLayout()
+        cols.setSpacing(10)
+        cols.addLayout(self.col_a, 1)
+        cols.addLayout(self.col_b, 1)
         self.detail_host = QWidget()
-        self.detail = QVBoxLayout(self.detail_host)
-        self.detail.setContentsMargins(0, 0, 6, 0)
-        self.detail.setSpacing(10)
+        dl = QVBoxLayout(self.detail_host)
+        dl.setContentsMargins(0, 0, 6, 0)
+        dl.addLayout(cols, 1)                      # kolom mengisi tinggi panel
         dscroll = QScrollArea()
         dscroll.setWidgetResizable(True)
         dscroll.setFrameShape(QFrame.Shape.NoFrame)
         dscroll.setWidget(self.detail_host)
-        title = QLabel("Rincian Modul")
-        title.setObjectName("pageTitle")
         right = QVBoxLayout()
-        right.addWidget(title)
+        right.addWidget(self.lbl_detail_title)
         right.addWidget(dscroll, 1)
-        right_w = QWidget()
-        right_w.setFixedWidth(340)
+        right_w = QFrame(objectName="detailPanel")
+        right_w.setStyleSheet(f"QFrame#detailPanel {{ border-left:1px solid {theme.BORDER}; }}")
+        self.right_w = right_w                     # lebar diatur di resizeEvent (ikut jendela)
+        right_w.setFixedWidth(600)
+        dscroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         right_w.setLayout(right)
 
         lay = QHBoxLayout(self)
@@ -308,6 +344,7 @@ class ModulesPage(QWidget):
             self.selected = next(iter(self.cards), "")
         self._relayout()
         self.select(self.selected)
+        self._build_overview()
 
     def _columns(self) -> int:
         return max(1, (self.scroll.viewport().width() + 14) // (CARD_W + 14))
@@ -330,17 +367,26 @@ class ModulesPage(QWidget):
             self.grid.setRowStretch(r, 0)
         for i, w in enumerate(items):
             self.grid.addWidget(w, i // cols, i % cols, Qt.AlignmentFlag.AlignTop)
-        self.grid.setRowStretch((len(items) - 1) // cols + 1, 1)   # sisa tinggi ke baris kosong
+
 
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
-        self._relayout()
+        # panel rincian ±38% lebar halaman (600–900 px): di layar lebar tidak sempit/terpotong,
+        # di layar kecil kartu modul tetap kebagian ruang
+        self.right_w.setFixedWidth(max(600, min(900, int(self.width() * 0.38))))
+        # hitung kolom grid SETELAH lebar panel diterapkan (viewport baru berubah di event berikut)
+        QTimer.singleShot(0, self._relayout)
 
     def select(self, mid: str) -> None:
         self.selected = mid
         for k, card in self.cards.items():
             card.set_selected(k == mid)
         self.btn_test.setEnabled(bool(mid) and not self._testing)
+        info = self.manager.modules.get(mid)
+        removable = info is not None and registry.is_removable(info)
+        self.btn_remove.setEnabled(removable)
+        self.btn_remove.setToolTip("Hapus modul ini dari komputer" if removable else
+                                   "Modul bawaan aplikasi tidak bisa dihapus")
         self._show_detail()
 
     def _selected(self) -> str:
@@ -358,14 +404,15 @@ class ModulesPage(QWidget):
         lay.addWidget(h)
         return f, lay
 
-    def _path_row(self, path: str, action: str) -> QWidget:
+    def _path_row(self, path: str, action: str, elide_left: bool = False) -> QWidget:
         w = QFrame()
         w.setObjectName("addr")
         lay = QHBoxLayout(w)
         lay.setContentsMargins(0, 0, 2, 0)
         ed = QLineEdit(path)
+        ed.setMinimumWidth(60)                     # path panjang tidak melebarkan panel
         ed.setReadOnly(True)
-        ed.setCursorPosition(0)
+        ed.setCursorPosition(len(path) if elide_left else 0)   # bagian akhir path paling penting
         ed.setToolTip(path)
         b = QToolButton()
         b.setObjectName("rowBtn")
@@ -408,63 +455,90 @@ class ModulesPage(QWidget):
         lay.addWidget(name)
         return box
 
-    def _show_detail(self) -> None:
-        while self.detail.count():
-            item = self.detail.takeAt(0)
+    @staticmethod
+    def _clear(layout) -> None:
+        """Kosongkan layout termasuk layout bersarang (baris tile, tabel)."""
+        while layout.count():
+            item = layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+            elif item.layout() is not None:
+                ModulesPage._clear(item.layout())
+                item.layout().deleteLater()
+
+    def _info_row(self, lay, ico_name: str, text: str) -> None:
+        r = QHBoxLayout()
+        r.setSpacing(8)
+        r.addWidget(_icon_label(ico_name))
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        r.addWidget(lbl, 1)
+        lay.addLayout(r)
+
+    def _show_detail(self) -> None:
+        self._clear(self.col_a)
+        self._clear(self.col_b_dyn)
         info = self.manager.modules.get(self.selected)
         if info is None:
-            self.detail.addWidget(QLabel("Belum ada modul terpasang."))
-            self.detail.addStretch()
+            self.lbl_detail_title.setText("Rincian Modul")
+            self.col_a.addWidget(QLabel("Belum ada modul terpasang."))
             return
         m = info.manifest
+        title, _ = _split_name(m.name if m else info.path.name)
+        self.lbl_detail_title.setText(f"Rincian Modul: {title}")
 
-        card, lay = self._card(f"Detail Modul: {m.name if m else info.path.name} ({info.id})")
+        # --- kolom A
+        card, lay = self._card("Informasi & Kontrak")
         if m is not None:
-            meta = QLabel(f"Versi {m.version} · kontrak api {m.api_version}<br>"
-                          f"Penulis: {', '.join(m.authors) or '-'} · Lisensi: {m.license or '-'}")
-            meta.setWordWrap(True)
-            meta.setStyleSheet(f"color:{theme.MUTED};")
-            lay.addWidget(meta)
+            self._info_row(lay, "report", f"Nama: {m.name}")
+            self._info_row(lay, "history", f"Versi: {m.version}")
+            self._info_row(lay, "shield", f"Kontrak API: {m.api_version}")
+            self._info_row(lay, "user", f"Penulis: {', '.join(m.authors) or '-'}")
+            self._info_row(lay, "check_circle", f"Lisensi: {m.license or '-'}")
+        self._info_row(lay, "key", f"ID: {info.id}")
         if info.errors:
             err = QLabel("Masalah:\n" + "\n".join(f"• {e}" for e in info.errors))
             err.setWordWrap(True)
             err.setStyleSheet(f"color:{theme.BAD};")
             lay.addWidget(err)
-        self.detail.addWidget(card)
+        self.col_a.addWidget(card)
 
-        card, lay = self._card("Lokasi & Kontrak")
-        lay.addWidget(QLabel("Folder modul ini:"))
-        lay.addWidget(self._path_row(str(info.path), "open"))
-        lay.addWidget(QLabel("Modul bawaan:"))
-        lay.addWidget(self._path_row(str(BUNDLED_MODULES_DIR), "copy"))
-        lay.addWidget(QLabel("Modul terpasang:"))
-        lay.addWidget(self._path_row(str(USER_MODULES_DIR), "open"))
-        lay.addWidget(QLabel("Kontrak:"))
-        lay.addWidget(self._path_row(CONTRACT, "copy"))
-        self.detail.addWidget(card)
+        card, lay = self._card("Lokasi File")
+        where = QLabel("Modul bawaan aplikasi" if _is_bundled(info.path) else
+                       "Dipasang pengguna")
+        where.setStyleSheet(f"color:{theme.MUTED};")
+        lay.addWidget(where)
+        lay.addWidget(self._path_row(str(info.path), "copy", elide_left=True))
+        self.col_a.addWidget(card)
 
         card, lay = self._card("Kamera yang Terhubung")
         cams = [c for c in sorted(self.manager.cameras.values(), key=lambda c: c.name.lower())
                 if self.manager.module_id(c) == info.id]
         if not cams:
-            none = QLabel("Belum ada kamera yang memakai modul ini.")
+            none = QLabel("Tidak ada kamera yang terhubung")
             none.setStyleSheet(f"color:{theme.MUTED};")
             lay.addWidget(none)
-        grid = QGridLayout()
-        grid.setSpacing(8)
-        for i, cam in enumerate(cams):
-            grid.addWidget(self._thumb(cam), i // 3, i % 3, Qt.AlignmentFlag.AlignLeft)
-        lay.addLayout(grid)
-        self.detail.addWidget(card)
+        for cam in cams:
+            r = QHBoxLayout()
+            r.setSpacing(8)
+            r.addWidget(_icon_label("camera", theme.MUTED))
+            name = QLabel(cam.name)
+            name.setToolTip(cam.name)
+            r.addWidget(name, 1)
+            running = self.manager.is_running(cam.id)
+            r.addWidget(_pill("Aktif", "green") if running else _pill("Berhenti", "gray"))
+            lay.addLayout(r)
+        self.col_a.addWidget(card)
 
         if m is not None:
-            card, lay = self._card("Rincian teknis")
+            card, lay = self._card("Parameter & Teknis")
             presets, _ = m.load_presets()
             parts = [
-                ("Model", f"{m.model.weights}\ntask {m.model.task} · imgsz {m.model.imgsz} · "
-                          f"conf {m.model.conf} · iou {m.model.iou}"),
+                (f"Model ({Path(m.model.weights).name})",
+                 (f"{m.model.weights}\ntask {m.model.task} · imgsz {m.model.imgsz} · "
+                  f"conf {m.model.conf} · iou {m.model.iou}\nkelas: "
+                  f"{', '.join(m.model.classes) or 'semua'}")),
                 ("Peran zona/garis", "\n".join(f"• {r.role} ({r.kind}) {r.label}"
                                                for r in m.regions) or "(tidak ada)"),
                 ("Parameter (diatur per kamera)", "\n".join(
@@ -478,34 +552,145 @@ class ModulesPage(QWidget):
             ]
             if info.warnings:
                 parts.append(("Peringatan", "\n".join(f"• {w}" for w in info.warnings)))
-            for i, (title, text) in enumerate(parts):
+            for i, (title_s, text) in enumerate(parts):
                 body = QLabel(text)
                 body.setWordWrap(True)
                 body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 body.setStyleSheet(f"color:{theme.MUTED};")
-                lay.addWidget(Section(title, body, expanded=i == 0))
-            self.detail.addWidget(card)
+                lay.addWidget(Section(title_s, body, expanded=i == 0))
+            lay.addStretch()
+            self.col_a.addWidget(card, 1)              # kartu terakhir memanjang ke bawah
+
+        # --- kolom B
+        card, lay = self._card("Folder")
+        lay.addWidget(QLabel("Folder modul ini:"))
+        lay.addWidget(self._path_row(str(info.path), "open", elide_left=True))
+        lay.addWidget(QLabel("Modul terpasang:"))
+        lay.addWidget(self._path_row(str(USER_MODULES_DIR), "open", elide_left=True))
+        lay.addWidget(QLabel("Kontrak modul:"))
+        lay.addWidget(self._path_row(CONTRACT, "copy"))
+        self.col_b_dyn.addWidget(card)
 
         card, lay = self._card("Hasil Uji Modul")
-        self.out = QPlainTextEdit(self._test_output.get(info.id, "Belum diuji. Klik “Uji Modul”."))
+        self.out = QPlainTextEdit(self._test_output.get(
+            info.id, "Belum diuji. Klik 'Uji Modul' di atas untuk memulai."))
         self.out.setObjectName("mono")
         self.out.setReadOnly(True)
-        self.out.setMinimumHeight(140)
+        self.out.setMinimumHeight(260)
         lay.addWidget(self.out)
         hint = QLabel("Uji penuh dengan video & paritas: python scripts/check_module.py "
                       "<folder> --video … --expected …")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color:{theme.MUTED}; font-size:11px;")
         lay.addWidget(hint)
-        self.detail.addWidget(card)
-        self.detail.addStretch()
+        self.col_b_dyn.addWidget(card, 1)              # hasil uji memanjang ke bawah
+
+    # ------------------------------------------------------------ ringkasan
+    def _build_overview(self) -> None:
+        """Bagian bawah area kartu: ringkasan angka & pemakaian modul per kamera."""
+        self._clear(self.overview)
+        mods = list(self.manager.modules.values())
+        cams = sorted(self.manager.cameras.values(), key=lambda c: c.name.lower())
+        used = [c for c in cams if self.manager.module_id(c) in self.manager.modules]
+        running = [c for c in cams if self.manager.is_running(c.id)]
+
+        title = QLabel("Ringkasan")
+        title.setObjectName("sectionTitle")
+        self.overview.addWidget(title)
+        tiles = QHBoxLayout()
+        tiles.setSpacing(12)
+        for ico_name, label, value in (
+                ("module", "Modul terpasang", f"{len(mods)}"),
+                ("check_circle", "Modul valid", f"{sum(m.valid for m in mods)} / {len(mods)}"),
+                ("camera", "Kamera memakai modul", f"{len(used)} / {len(cams)}"),
+                ("play", "Kamera berjalan", f"{len(running)}")):
+            tiles.addWidget(self._tile(ico_name, label, value), 1)
+        self.overview.addLayout(tiles)
+
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        card, lay = self._card("Pemakaian Modul per Kamera")
+        if not cams:
+            none = QLabel("Belum ada kamera. Tambahkan di halaman Kamera.")
+            none.setStyleSheet(f"color:{theme.MUTED};")
+            lay.addWidget(none)
+        else:
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(18)
+            grid.setVerticalSpacing(8)
+            for col, h in enumerate(("Kamera", "Modul", "Zona / Garis", "Status")):
+                hl = QLabel(h)
+                hl.setStyleSheet(f"color:{theme.MUTED}; font-weight:bold;")
+                grid.addWidget(hl, 0, col)
+            for r, cam in enumerate(cams, 1):
+                mid = self.manager.module_id(cam)
+                info = self.manager.modules.get(mid)
+                prof = self.manager.profile(cam)
+                name = QLabel(cam.name)
+                name.setToolTip(cam.name)
+                grid.addWidget(name, r, 0)
+                mod = _pill(mid, "teal" if info is not None and info.valid else "red")
+                mod.setCursor(Qt.CursorShape.PointingHandCursor)
+                mod.mousePressEvent = lambda _e, m=mid: m in self.cards and self.select(m)
+                grid.addWidget(mod, r, 1, Qt.AlignmentFlag.AlignLeft)
+                grid.addWidget(QLabel(f"{len(prof.zones)} • {len(prof.lines)}"), r, 2)
+                on = self.manager.is_running(cam.id)
+                grid.addWidget(_pill("Berjalan", "green") if on else _pill("Berhenti", "gray"),
+                               r, 3, Qt.AlignmentFlag.AlignLeft)
+            grid.setColumnStretch(0, 2)
+            grid.setColumnStretch(1, 2)
+            lay.addLayout(grid)
+        lay.addStretch()
+        row.addWidget(card, 3)
+
+        self.overview.addLayout(row)
+
+    @staticmethod
+    def _tile(ico_name: str, label: str, value: str) -> QFrame:
+        f = QFrame(objectName="tile")
+        lay = QHBoxLayout(f)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(12)
+        lay.addWidget(_icon_label(ico_name, "#4FA3F7", 26))
+        col = QVBoxLayout()
+        col.setSpacing(0)
+        lbl = QLabel(label)
+        lbl.setStyleSheet(f"color:{theme.MUTED};")
+        v = QLabel(value)
+        v.setObjectName("tileValue")
+        col.addWidget(lbl)
+        col.addWidget(v)
+        lay.addLayout(col, 1)
+        return f
 
     # --------------------------------------------------------------- aksi
-    def _install_menu(self) -> None:
+    def _install_menu(self, anchor: QWidget) -> None:
         menu = QMenu(self)
         menu.addAction(icon("folder", theme.TEXT), "Dari folder…", lambda: self._install(False))
         menu.addAction(icon("archive", theme.TEXT), "Dari ZIP…", lambda: self._install(True))
-        menu.exec(self.add_card.mapToGlobal(self.add_card.rect().center()))
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+
+    def _uninstall(self) -> None:
+        info = self.manager.modules.get(self._selected())
+        if info is None or not registry.is_removable(info):
+            return
+        users = [c.name for c in self.manager.cameras.values()
+                 if self.manager.module_id(c) == info.id]
+        warn = (f"\n\n⚠ Dipakai {len(users)} kamera ({', '.join(users)}). Kamera itu akan gagal "
+                "dijalankan sampai modulnya diganti di dialog kamera.") if users else ""
+        if QMessageBox.question(self, "Hapus modul", f"Hapus modul “{info.id}” dari komputer ini?"
+                                f"\n{info.path}{warn}") != QMessageBox.StandardButton.Yes:
+            return
+        for c in self.manager.cameras.values():    # hentikan kamera yang memakai modul ini
+            if self.manager.module_id(c) == info.id:
+                self.manager.stop(c.id)
+        try:
+            registry.uninstall(info)
+        except OSError as e:
+            QMessageBox.warning(self, "Gagal menghapus modul", str(e))
+            return
+        self.selected = ""
+        self.manager.reload_modules()
 
     def _install(self, zip_file: bool) -> None:
         if zip_file:

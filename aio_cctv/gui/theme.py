@@ -132,7 +132,9 @@ QPushButton#success:hover {{ background:#388E3C; }}
 QPushButton#success:disabled {{ background:{SURFACE_2}; border-color:{SURFACE_2}; color:{DISABLED}; }}
 QLabel#sectionTitle {{ font-size:15px; font-weight:bold; }}
 QFrame#floatbar {{ background:rgba(28,28,28,0.90); border:1px solid {BORDER_STRONG}; border-radius:8px; }}
-QFrame#floatbar QToolButton {{ background:transparent; border:none; border-radius:6px; padding:4px 9px; }}
+QFrame#floatbar QToolButton {{ background:transparent; border:none; border-radius:6px; padding:4px 10px; }}
+QLabel#floatHint {{ background:rgba(28,28,28,0.88); color:{TEXT}; border:1px solid {BORDER_STRONG};
+                    border-radius:6px; padding:4px 10px; }}
 QFrame#floatbar QToolButton:hover {{ background:{SURFACE_2}; }}
 QFrame#floatbar QToolButton:checked {{ background:{ACCENT_SOFT}; border:1px solid {BORDER_STRONG}; }}
 QFrame#floatSep {{ background:{BORDER_STRONG}; max-width:1px; margin:4px 4px; }}

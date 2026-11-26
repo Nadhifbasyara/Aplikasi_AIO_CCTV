@@ -36,12 +36,39 @@ from aio_cctv.sources.url_builder import BRANDS
 
 log = logging.getLogger(__name__)
 
-# (judul, lebar tetap px atau None = melebar, rata tengah?) — dipakai kepala tabel & tiap kartu
-COLUMNS = [("Nama", None, False), ("Jenis", 105, True), ("Alamat", None, False),
-           ("Stream", 60, True), ("Modul", 105, True), ("Zona/Garis", 135, True),
-           ("Status", 100, False), ("Aktif", 50, True), ("", 28, True), ("Aksi", 136, True)]
-STRETCH = {"Nama": 2, "Alamat": 4}
-MARGIN_H = 14                                     # padding kiri/kanan kartu = kepala tabel
+# (judul, lebar tetap px atau None = melebar, rata tengah?) — dipakai kepala tabel & tiap baris
+COLUMNS = [("Nama / Jenis", None, False), ("Alamat IP", None, False),
+           ("Analitik & Zona", None, False), ("Status & Aktif", 170, False), ("Aksi", 318, False)]
+STRETCH = {"Nama / Jenis": 3, "Alamat IP": 3, "Analitik & Zona": 4}
+MARGIN_H = 18                                     # padding kiri/kanan baris = kepala tabel
+
+TABLE_QSS = f"""
+QFrame#camTable {{ background:{theme.SURFACE}; border:1px solid {theme.BORDER_STRONG};
+                   border-radius:10px; }}
+QFrame#camHead {{ border:none; border-bottom:1px solid {theme.BORDER_STRONG}; }}
+QLabel#colHead {{ font-weight:bold; color:{theme.TEXT}; border:none; }}
+QFrame#camRow {{ border:none; border-bottom:1px solid {theme.BORDER}; background:transparent; }}
+QFrame#camRow:hover {{ background:rgba(255,255,255,0.03); }}
+QFrame#camRow[selected="true"] {{ background:{theme.ACCENT_SOFT}; }}
+QLabel#camName {{ font-size:16px; font-weight:bold; border:none; }}
+QLabel#camHost {{ font-size:14px; border:none; }}
+QPushButton#linkBtn {{ background:transparent; border:none; color:{theme.MUTED}; padding:2px 4px; }}
+QPushButton#linkBtn:hover {{ color:{theme.TEXT}; }}
+QLabel#pageTitle2 {{ font-size:22px; font-weight:bold; }}
+"""
+
+
+def host_of(cam: CameraConfig) -> str:
+    """Alamat yang ditampilkan: IP/host kamera (tanpa path & kredensial), atau nama file."""
+    from pathlib import PurePath
+    from urllib.parse import urlparse
+    if cam.brand == "file":
+        return PurePath(cam.file_path or "").name or "—"
+    if cam.brand == "webcam":
+        return "Webcam lokal"
+    if cam.host:
+        return cam.host
+    return urlparse(source_config(cam)["uri"]).hostname or "—"
 
 
 class ElidedLabel(QLabel):
@@ -101,63 +128,72 @@ def _row(widgets: list[QWidget]) -> QHBoxLayout:
 
 
 class CameraCard(QFrame):
+    """Satu baris tabel kamera."""
     clicked = pyqtSignal(str)
 
     def __init__(self, page: "CamerasPage", cam: CameraConfig):
         super().__init__()
         self.page, self.cam = page, cam
-        self.setObjectName("card")
+        self.setObjectName("camRow")
         self.setProperty("selected", False)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         mgr = page.manager
         running = mgr.is_running(cam.id)
 
-        # Nama + lokasi
+        # Nama / Jenis
         name = QWidget()
         nl = QVBoxLayout(name)
         nl.setContentsMargins(0, 0, 0, 0)
-        nl.setSpacing(4)
+        nl.setSpacing(5)
         title = ElidedLabel(cam.name)
-        title.setObjectName("cardTitle")
+        title.setObjectName("camName")
         nl.addWidget(title)
-        if cam.location:
-            loc = _pill(cam.location, "gray")
-            loc.setSizePolicy(loc.sizePolicy().horizontalPolicy(), loc.sizePolicy().verticalPolicy())
-            row = QHBoxLayout()
-            row.addWidget(loc)
-            row.addStretch()
-            nl.addLayout(row)
-
-        # Jenis
         if cam.brand == "file":
-            kind = _pill("File video", "orange")
+            kind = "File video"
         elif cam.brand == "webcam":
-            kind = _pill("Webcam", "purple")
+            kind = "Webcam"
         elif cam.brand == "custom":
-            kind = _pill("URL manual", "blue")
+            kind = "URL Manual"
         else:
-            kind = _pill(BRANDS.get(cam.brand, {}).get("label", cam.brand), "blue")
+            kind = BRANDS.get(cam.brand, {}).get("label", cam.brand)
+        tags = QHBoxLayout()
+        tags.setSpacing(6)
+        k = _pill(kind, "gray")
+        if cam.brand not in ("file", "webcam"):
+            k.setToolTip(f"Stream: {'Main-stream' if cam.stream == 'main' else 'Sub-stream'}")
+        tags.addWidget(k)
+        if cam.location:
+            loc = QLabel(cam.location)
+            loc.setStyleSheet(f"color:{theme.MUTED}; border:none;")
+            tags.addWidget(loc)
+        tags.addStretch()
+        nl.addLayout(tags)
 
-        # Alamat (sudah tersamar, tidak menyentuh keyring) + Salin
-        addr = QFrame()
-        addr.setObjectName("addr")
+        # Alamat IP + Salin RTSP (password tetap tersamar)
+        addr = QWidget()
         al = QHBoxLayout(addr)
-        al.setContentsMargins(0, 0, 3, 0)
-        al.setSpacing(2)
+        al.setContentsMargins(0, 0, 0, 0)
+        al.setSpacing(8)
         uri = source_config(cam)["uri"]
-        ed = QLineEdit(uri)
-        ed.setMinimumWidth(60)
-        ed.setReadOnly(True)
-        ed.setCursorPosition(0)
-        ed.setToolTip(uri)
-        btn_copy = _btn("Salin", "copy", "small", "Salin alamat (password tetap tersamar)")
-        btn_copy.clicked.connect(lambda: self._copy(uri, btn_copy))
-        al.addWidget(ed, 1)
-        al.addWidget(btn_copy)
+        host = QLabel(host_of(cam))
+        host.setObjectName("camHost")
+        host.setToolTip(uri)
+        al.addWidget(host)
+        if cam.brand not in ("file", "webcam"):
+            btn_copy = QPushButton(icon("copy", theme.MUTED), " Salin RTSP")
+            btn_copy.setObjectName("linkBtn")
+            btn_copy.setIconSize(QSize(14, 14))
+            btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_copy.setToolTip("Salin alamat RTSP (password tetap tersamar)")
+            btn_copy.clicked.connect(lambda: self._copy(uri, btn_copy))
+            al.addWidget(btn_copy)
+        al.addStretch()
 
-        stream = QLabel("—" if cam.brand in ("file", "webcam") else cam.stream)
-
-        # Modul
+        # Analitik & Zona: modul + jumlah zona/garis (klik = buka editor zona)
+        ana = QWidget()
+        nl2 = QHBoxLayout(ana)
+        nl2.setContentsMargins(0, 0, 0, 0)
+        nl2.setSpacing(8)
         mid = mgr.module_id(cam)
         info = mgr.modules.get(mid)
         if info is None:
@@ -169,18 +205,19 @@ class CameraCard(QFrame):
         else:
             mod = _pill(mid, "teal")
             mod.setToolTip(f"{info.manifest.name} {info.manifest.version}")
-
-        # Zona/garis (klik = buka editor zona)
         prof = mgr.profile(cam)
-        zones = QPushButton(icon("list", theme.PILLS["gray"][0]),
-                            f" {len(prof.zones)} zona / {len(prof.lines)} garis")
+        zones = QPushButton(icon("list", theme.TEXT),
+                            f" {len(prof.zones)} Zona • {len(prof.lines)} Garis")
         zones.setIconSize(QSize(13, 13))
         zones.setProperty("pill", "gray")
         zones.setCursor(Qt.CursorShape.PointingHandCursor)
         zones.setToolTip("Gambar / ubah zona")
         zones.clicked.connect(lambda: page.zones_requested.emit(cam.id))
+        nl2.addWidget(mod)
+        nl2.addWidget(zones)
+        nl2.addStretch()
 
-        # Status
+        # Status & Aktif
         err = mgr.web_state.camera(cam.id).error if mgr.web_state.camera(cam.id) else ""
         if running and not err:
             color, text = theme.OK, "Berjalan"
@@ -190,30 +227,38 @@ class CameraCard(QFrame):
             color, text = theme.DISABLED, "Nonaktif"
         else:
             color, text = theme.MUTED, "Berhenti"
-        status = QLabel(f"<span style='color:{color}; font-size:15px'>●</span> "
-                        f"<span style='color:{color}'>{text}</span>")
-        if err:
-            status.setToolTip(err)
-
-        # Aktif
+        st = QWidget()
+        sl = QHBoxLayout(st)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(10)
         sw = QCheckBox()
         sw.setObjectName("switch")
         sw.setChecked(cam.enabled)
         sw.setCursor(Qt.CursorShape.PointingHandCursor)
         sw.setToolTip("Kamera aktif ikut dijalankan oleh \"Mulai semua\"")
         sw.toggled.connect(lambda on: page.set_enabled(cam.id, on))
+        status = QLabel(f"<span style='color:{color}; font-size:15px'>●</span> "
+                        f"<span style='color:{color}'>{text}</span>")
+        status.setStyleSheet("border:none;")
+        if err:
+            status.setToolTip(err)
+        sl.addWidget(sw)
+        sl.addWidget(status)
+        sl.addStretch()
 
-        # Menu ⋮
+        # Aksi: Lihat Live, Gambar Zona, menu ⋮
         kebab = QToolButton()
         kebab.setObjectName("kebab")
         kebab.setIcon(icon("more", theme.TEXT))
         kebab.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        kebab.setFixedSize(34, 34)
+        kebab.setStyleSheet(f"QToolButton#kebab {{ border:1px solid {theme.BORDER_STRONG};"
+                            f" border-radius:6px; }} QToolButton::menu-indicator {{ image:none; }}")
         menu = QMenu(kebab)
         menu.addAction(icon("stop" if running else "play", theme.TEXT),
                        "Hentikan" if running else "Jalankan", lambda: page.toggle_run(cam.id))
-        menu.addAction(icon("edit", theme.TEXT), "Ubah…", lambda: page.edit_camera(cam.id))
-        menu.addAction(icon("brush", theme.TEXT), "Gambar zona",
-                       lambda: page.zones_requested.emit(cam.id))
+        menu.addAction(icon("edit", theme.TEXT), "Ubah / Pengaturan…",
+                       lambda: page.edit_camera(cam.id))
         menu.addAction(icon("wand", theme.TEXT), "Wizard preset…", lambda: page.wizard(cam.id))
         menu.addSeparator()
         menu.addAction(icon("export", theme.TEXT), "Ekspor profil…",
@@ -223,23 +268,22 @@ class CameraCard(QFrame):
         menu.addSeparator()
         menu.addAction(icon("trash", theme.BAD), "Hapus kamera…", lambda: page.delete_camera(cam.id))
         kebab.setMenu(menu)
-
-        # Aksi
         actions = QWidget()
-        acl = QVBoxLayout(actions)
+        acl = QHBoxLayout(actions)
         acl.setContentsMargins(0, 0, 0, 0)
-        acl.setSpacing(5)
+        acl.setSpacing(8)
         btn_live = _btn("Lihat Live", "eye")
         btn_live.clicked.connect(lambda: page.live_requested.emit(cam.id))
-        btn_set = _btn("Pengaturan", "settings")
-        btn_set.clicked.connect(lambda: page.edit_camera(cam.id))
-        for b in (btn_live, btn_set):
-            b.setFixedWidth(130)
-            acl.addWidget(b)
+        btn_zone = _btn("Gambar Zona", "zone")
+        btn_zone.clicked.connect(lambda: page.zones_requested.emit(cam.id))
+        acl.addWidget(btn_live)
+        acl.addWidget(btn_zone)
+        acl.addWidget(kebab)
+        acl.addStretch()
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 10, 0, 10)
-        lay.addLayout(_row([name, kind, addr, stream, mod, zones, status, sw, kebab, actions]))
+        lay.setContentsMargins(0, 14, 0, 14)
+        lay.addLayout(_row([name, addr, ana, st, actions]))
 
     def _copy(self, text: str, btn: QPushButton) -> None:
         QApplication.clipboard().setText(text)
@@ -275,70 +319,83 @@ class CamerasPage(QWidget):
         self.refresh()
 
     def _setup_ui(self) -> None:
+        self.setStyleSheet(TABLE_QSS)
         self.btn_add = _btn("Tambah Kamera", "plus", "primary")
         self.btn_dvr = _btn("Tambah DVR/NVR", "module", tip="Satu DVR/NVR, banyak channel sekaligus")
-        self.btn_edit = _btn("Ubah", "edit")
-        self.btn_del = _btn("Hapus", "trash", "danger")
-        self.btn_zones = _btn("Gambar zona", "brush")
-        self.btn_wizard = _btn("Wizard preset…", "wand", tip="Pasang modul + preset: gambar area "
-                               "per langkah, aturan & dashboard terpasang otomatis")
-        self.btn_export = _btn("Ekspor profil…", "export")
-        self.btn_import = _btn("Impor profil…", "import")
+        self.btn_wizard = _btn("Wizard Preset", "wand", tip="Pasang modul + preset untuk kamera "
+                               "terpilih: gambar area per langkah, aturan & dashboard otomatis")
+        self.btn_export = _btn("Ekspor profil", "export", tip="Ekspor profil kamera terpilih")
+        self.btn_import = _btn("Impor profil", "import", tip="Impor profil ke kamera terpilih")
         self.btn_add.clicked.connect(lambda: self.add_camera())
         self.btn_dvr.clicked.connect(lambda: self.add_dvr())
-        self.btn_edit.clicked.connect(lambda: self.edit_camera())
-        self.btn_del.clicked.connect(lambda: self.delete_camera())
-        self.btn_zones.clicked.connect(lambda: self._request_zones())
         self.btn_wizard.clicked.connect(lambda: self.wizard())
         self.btn_export.clicked.connect(lambda: self.export_profile())
         self.btn_import.clicked.connect(lambda: self.import_profile())
 
-        bar = QHBoxLayout()
-        for b in (self.btn_add, self.btn_dvr, self.btn_edit, self.btn_del, self.btn_zones, self.btn_wizard):
-            bar.addWidget(b)
-        bar.addStretch()
-        bar.addWidget(self.btn_export)
-        bar.addWidget(self.btn_import)
-
-        title = QLabel("Kamera")
-        title.setObjectName("pageTitle")
         self.ed_search = QLineEdit()
         self.ed_search.setObjectName("search")
         self.ed_search.setPlaceholderText("Cari kamera…")
+        self.ed_search.setMinimumWidth(260)
         self.ed_search.addAction(icon("search", theme.MUTED), QLineEdit.ActionPosition.TrailingPosition)
         self.ed_search.setClearButtonEnabled(True)
         self.ed_search.textChanged.connect(self._apply_filter)
-        head = QHBoxLayout()
-        head.addWidget(title)
-        head.addStretch()
-        head.addWidget(self.ed_search)
 
+        bar = QHBoxLayout()
+        for b in (self.btn_add, self.btn_dvr, self.btn_wizard):
+            bar.addWidget(b)
+        bar.addStretch()
+        bar.addWidget(self.ed_search)
+        bar.addSpacing(6)
+        bar.addWidget(self.btn_export)
+        bar.addWidget(self.btn_import)
+
+        title = QLabel("Manajemen Kamera")
+        title.setObjectName("pageTitle2")
+        self.lbl_sub = QLabel()
+        self.lbl_sub.setStyleSheet(f"color:{theme.MUTED};")
+
+        # tabel: kepala + daftar baris di dalam satu kartu bersudut
         headers = []
         for t, _, _ in COLUMNS:
             lbl = QLabel(t)
-            lbl.setObjectName("colHeader")
+            lbl.setObjectName("colHead")
             headers.append(lbl)
+        head = QFrame(objectName="camHead")
+        hl = QVBoxLayout(head)
+        hl.setContentsMargins(0, 14, 0, 14)
+        hl.addLayout(_row(headers))
 
-        self.list_host = QWidget()
+        self.list_host = QWidget(objectName="camList")
+        # pakai selektor: aturan tanpa selektor turun ke anak & menghapus latar pill
+        self.list_host.setStyleSheet("QWidget#camList { background:transparent; }")
         self.list_lay = QVBoxLayout(self.list_host)
-        self.list_lay.setContentsMargins(0, 0, 4, 0)
-        self.list_lay.setSpacing(8)
+        self.list_lay.setContentsMargins(0, 0, 0, 0)
+        self.list_lay.setSpacing(0)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background:transparent; border:none; }")
         scroll.setWidget(self.list_host)
         self.empty = QLabel("Belum ada kamera. Klik “+ Tambah Kamera” untuk menambahkan.")
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty.setStyleSheet(f"color:{theme.MUTED}; padding:30px;")
+        self.empty.setStyleSheet(f"color:{theme.MUTED}; padding:30px; border:none;")
+
+        self.table = QFrame(objectName="camTable")
+        tl = QVBoxLayout(self.table)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(0)
+        tl.addWidget(head)
+        tl.addWidget(self.empty)
+        tl.addWidget(scroll, 1)
+        self._scroll = scroll
 
         lay = QVBoxLayout(self)
         lay.addLayout(bar)
-        lay.addSpacing(6)
-        lay.addLayout(head)
-        lay.addSpacing(4)
-        lay.addLayout(_row(headers))
-        lay.addWidget(self.empty)
-        lay.addWidget(scroll, 1)
+        lay.addSpacing(14)
+        lay.addWidget(title)
+        lay.addWidget(self.lbl_sub)
+        lay.addSpacing(10)
+        lay.addWidget(self.table, 1)
 
     # ------------------------------------------------------------------ isi
     def refresh(self) -> None:
@@ -362,6 +419,9 @@ class CamerasPage(QWidget):
             self.selected = cams[0].id if cams else ""
         self.select(self.selected)
         self.empty.setVisible(not cams)
+        running = sum(self.manager.is_running(c.id) for c in cams)
+        self.lbl_sub.setText(f"{running} kamera aktif" + (f" dari {len(cams)}" if
+                                                          len(cams) != running else ""))
         self._apply_filter()
 
     def _apply_filter(self) -> None:
@@ -377,8 +437,7 @@ class CamerasPage(QWidget):
         for cid, card in self.cards.items():
             card.set_selected(cid == cam_id)
         has = bool(cam_id)
-        for b in (self.btn_edit, self.btn_del, self.btn_zones, self.btn_wizard, self.btn_export,
-                  self.btn_import):
+        for b in (self.btn_wizard, self.btn_export, self.btn_import):
             b.setEnabled(has)
 
     def selected_id(self) -> str:
@@ -440,10 +499,6 @@ class CamerasPage(QWidget):
             log.info("password %s tidak dihapus: %s", cam.id, e)
         self.manager.cameras.pop(cam.id, None)
         self.manager.save()
-
-    def _request_zones(self) -> None:
-        if cam_id := self.selected_id():
-            self.zones_requested.emit(cam_id)
 
     # ------------------------------------------------------------ Fase 8
     def wizard(self, cam_id: str | None = None) -> None:

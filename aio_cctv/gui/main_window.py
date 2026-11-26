@@ -106,6 +106,7 @@ class MainWindow(QMainWindow):
             self.tray.show()
         self.camera_manager.alert_raised.connect(self._on_alert)
         self.page_alerts.unread_changed.connect(self._set_unread)
+        self.page_alerts.live_requested.connect(self._show_live)
 
         # 5. Dashboard web lokal (Fase 8)
         self.lbl_web = QLabel()

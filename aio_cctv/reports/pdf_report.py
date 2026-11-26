@@ -117,11 +117,15 @@ def build_report(db, cameras: list[CameraInfo], start: float, end: float,
 
 
 def render_html(reports: list[CamReport], start: float, end: float,
-                app_version: str = "") -> tuple[str, dict[str, np.ndarray]]:
+                app_version: str = "", notes: str = "") -> tuple[str, dict[str, np.ndarray]]:
+    """notes: catatan bebas pembuat laporan (halaman Laporan), dicetak di bawah judul."""
     images: dict[str, np.ndarray] = {}
     parts = [(f"<h1>Laporan Analitik CCTV</h1><p>{header(start, end)} · "
               f"dibuat {_fmt_ts(datetime.now().timestamp())}"
               f"{' · AIO-CCTV ' + escape(app_version) if app_version else ''}</p>")]
+    if notes.strip():
+        parts.append("<h3>Catatan</h3><p class='note'>"
+                     + escape(notes.strip()).replace("\n", "<br>") + "</p>")
     for r in reports:
         m = r.info.manifest
         parts.append(f"<h2>{escape(r.info.name)}</h2>")
@@ -155,7 +159,7 @@ def render_html(reports: list[CamReport], start: float, end: float,
              "h2{font-size:13pt;margin-top:14px} h3{font-size:10pt} table{border-collapse:collapse} "
              "th,td{border:1px solid #999;padding:2px 6px} th{background:#eee} .muted{color:#777}"
              " table.kpis td{border:1px solid #ccc;background:#f6f6f6;padding:4px 10px}"
-             " .big{font-size:12pt}</style>")
+             " .big{font-size:12pt} .note{border-left:3px solid #999;padding-left:8px}</style>")
     return f"<html><head>{style}</head><body>{''.join(parts)}</body></html>", images
 
 

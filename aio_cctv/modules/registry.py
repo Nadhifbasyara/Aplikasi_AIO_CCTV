@@ -147,3 +147,21 @@ def install(src: str | Path, replace: bool = False, dest_root: Path = USER_MODUL
             shutil.rmtree(dest)
         shutil.copytree(src_dir, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     return inspect(dest)
+
+
+def is_removable(info: ModuleInfo, root: Path = USER_MODULES_DIR) -> bool:
+    """Hanya modul yang dipasang pengguna (di folder modul pengguna) yang boleh dihapus;
+    modul bawaan aplikasi tidak."""
+    try:
+        path, base = Path(info.path).resolve(), Path(root).resolve()
+    except OSError:
+        return False
+    return path != base and path.is_relative_to(base)
+
+
+def uninstall(info: ModuleInfo, root: Path = USER_MODULES_DIR) -> None:
+    """Hapus folder modul pengguna. Kamera yang memakainya akan gagal sampai diganti modulnya."""
+    if not is_removable(info, root):
+        raise PermissionError(f"modul '{info.id}' adalah modul bawaan aplikasi dan tidak bisa "
+                              "dihapus")
+    shutil.rmtree(info.path)
