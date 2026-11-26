@@ -1,6 +1,6 @@
 import logging
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 
 import supervision as sv
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -20,6 +20,9 @@ from aio_cctv.storage.aggregator import Aggregator, HealthRecorder, record_alert
 from aio_cctv.zones.models import Profile
 
 log = logging.getLogger(__name__)
+
+FLOW_WINDOW_S = 10.0         # rata-rata frame hilang (peringatan "PC kewalahan")
+
 
 def frame_flow(cam_fps: float, proc_fps: float, target_fps: float) -> dict:
     """Pecah frame kamera per detik menjadi: dianalisis + dilewati sengaja + hilang (beban).
@@ -72,6 +75,7 @@ class PipelineWorker(QThread):
         self.stream_label = ""                     # "Main-stream"/"Sub-stream" (diisi manager)
         self._ds_error = ""                        # alasan DeepStream terakhir yang ditampilkan
         self._reconnect_hist: list[tuple[float, int]] = []   # (waktu, total reconnect)
+        self._flow_hist: deque = deque()   # (waktu, frame dianalisis, durasi, fps kamera)
 
     def _make_source(self):
         if self.uri.startswith("rtsp://"):
@@ -218,7 +222,15 @@ class PipelineWorker(QThread):
                     frames_cx = getattr(stream_stats, "frames_consumed", 0)
                     proc_fps = n / (now - t_fps)
                     cam_fps = getattr(stream_stats, "recv_fps", getattr(src, "fps", 0.0))
-                    flow = frame_flow(cam_fps, proc_fps,
+                    # frame hilang dirata-rata FLOW_WINDOW_S detik: hitungan per 1 detik selalu
+                    # bulat (9 vs 10 frame = selisih 1 frame = ±5% di kamera 20 fps), jadi
+                    # peringatan "PC kewalahan" muncul-hilang padahal PC tidak kewalahan
+                    self._flow_hist.append((now, n, now - t_fps, cam_fps))
+                    while now - self._flow_hist[0][0] > FLOW_WINDOW_S:
+                        self._flow_hist.popleft()
+                    dt = sum(h[2] for h in self._flow_hist)
+                    flow = frame_flow(sum(h[3] * h[2] for h in self._flow_hist) / dt,
+                                      sum(h[1] for h in self._flow_hist) / dt,
                                       self.target_fps if is_rtsp else 0.0)
                     kib_s = getattr(stream_stats, "bandwidth_kbps", 0.0)
                     reconnects = getattr(stream_stats, "reconnects", 0)
@@ -259,6 +271,8 @@ class PipelineWorker(QThread):
                         "module": self.module.manifest.name,
                         "tracks": len(res.tracks) if res is not None else 0,
                         "metrics": self._camera_metrics(res),
+                        # orang per zona saat ini [nama, warna, jumlah] -> panel "Per Zona" tile
+                        "zones": [list(z) for z in pipe.zone_counts(res)] if pipe else [],
                         # nilai mentah terakhir [key, region_id, value] -> KPI "sekarang"
                         "live_metrics": [[m.key, m.region_id, float(m.value)]
                                          for m in res.metrics] if res is not None else [],

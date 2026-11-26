@@ -48,6 +48,24 @@ class Annotator:
                 parts.append(f"{spec.label or m.key} {fmt_value(m.value)}{spec.unit and ' ' + spec.unit}")
         return f"{name}: {' · '.join(parts)}" if parts else name
 
+    def zone_counts(self, res: ModuleResult | None) -> list[tuple[str, str, int]]:
+        """Jumlah objek terlacak di tiap zona saat ini: [(nama, warna, jumlah)].
+
+        Dihitung host dari titik kaki (tengah-bawah kotak), jadi berlaku untuk modul apa pun
+        walau modul tidak mengeluarkan metrik per zona."""
+        if not self.zone_polys:
+            return []
+        det = res.tracks if res is not None else None
+        feet = (det.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)
+                if det is not None and len(det) else np.empty((0, 2)))
+        out = []
+        for z, poly in self.zone_polys:
+            contour = poly.reshape(-1, 1, 2).astype(np.int32)
+            n = sum(cv2.pointPolygonTest(contour, (float(x), float(y)), False) >= 0
+                    for x, y in feet)
+            out.append((z.name, z.color, int(n)))
+        return out
+
     def annotate(self, frame: np.ndarray, res: ModuleResult) -> np.ndarray:
         det = res.tracks
         img = frame.copy()

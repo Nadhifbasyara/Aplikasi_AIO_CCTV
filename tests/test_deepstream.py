@@ -213,3 +213,25 @@ def test_live_activity_text_and_kpi_cards():
         == "Line cross (masuk)"
     s = {"metrics": {"Orang terlacak": "3 orang", "Total pengunjung": "35 orang", "x": "1"}}
     assert kpi_items(s) == [("Orang terlacak", "3"), ("Total pengunjung", "35")]
+
+
+def test_zone_counts_use_feet_point_and_panel_text():
+    from aio_cctv.annotate import Annotator
+    from aio_cctv.gui.widgets.video_tile import zone_html
+    from aio_cctv.modules.api import ModuleResult
+    from aio_cctv.zones.models import Zone
+    m = load_manifest(BUNDLED_MODULES_DIR / "baseline")
+    zones = [Zone(id="z1", name="Meja1", polygon=[(0, 0), (0.5, 0), (0.5, 1), (0, 1)],
+                  color="#E53935"),
+             Zone(id="z2", name="Meja2", polygon=[(0.5, 0), (1, 0), (1, 1), (0.5, 1)],
+                  color="#1E88E5")]
+    profile = Profile(profile_id="p", source=SourceConfig(uri=""), zones=zones)
+    ann = Annotator(profile, (100, 100), m)
+    # kaki orang ke-3 di kanan walau kotaknya melebar ke kiri
+    det = sv.Detections(xyxy=np.array([[5, 5, 20, 50], [10, 10, 30, 60], [30, 10, 90, 60]],
+                                      np.float32), tracker_id=np.array([1, 2, 3]))
+    assert ann.zone_counts(ModuleResult(tracks=det)) == [("Meja1", "#E53935", 2),
+                                                          ("Meja2", "#1E88E5", 1)]
+    assert ann.zone_counts(None) == [("Meja1", "#E53935", 0), ("Meja2", "#1E88E5", 0)]
+    html = zone_html([("A", "#fff", 0), ("B", "#fff", 3), ("C", "#fff", 1)], max_rows=2)
+    assert html.index("B") < html.index("C") and "+1 zona lain (0 orang)" in html

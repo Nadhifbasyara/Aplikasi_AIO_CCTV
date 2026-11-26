@@ -67,6 +67,9 @@ class Pipeline:
         self.times.module_ms = self.module.module_ms
         return res
 
+    def zone_counts(self, res: ModuleResult | None) -> list[tuple[str, str, int]]:
+        return self.annotator.zone_counts(res)
+
     def annotate(self, image, res: ModuleResult):
         return self.annotator.annotate(image, res)
 

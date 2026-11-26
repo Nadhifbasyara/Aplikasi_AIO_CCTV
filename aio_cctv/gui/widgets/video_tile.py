@@ -206,6 +206,29 @@ class VideoView(QLabel):
         self.kpi_lay.setContentsMargins(0, 0, 0, 0)
         self.kpi_lay.setSpacing(10)
         self.kpis: list[QLabel] = []
+        self.zone_box = QLabel(self)               # panel "Per Zona" (kanan bawah)
+        self.zone_box.setTextFormat(Qt.TextFormat.RichText)
+        self.zone_box.hide()
+        self._zones: list = []
+
+    def set_zones(self, items: list) -> None:
+        """items: [(nama, warna, jumlah)] dari stats["zones"]; kosong = panel disembunyikan."""
+        self._zones = list(items or [])
+        if not self._zones:
+            self.zone_box.hide()
+            return
+        fs = max(10, min(15, self.width() // 65))
+        self.zone_box.setText(zone_html(self._zones, fs, self._zone_rows_fit(fs)))
+        self.zone_box.setStyleSheet(
+            "background:rgba(20,23,27,205); border:1px solid #5A6068; border-radius:9px;"
+            f" color:white; padding:{fs // 2}px {fs - 2}px; font-size:{fs}px;")
+        self.zone_box.show()
+        self.zone_box.adjustSize()
+        self._place()
+
+    def _zone_rows_fit(self, fs: int) -> int:
+        """Banyak baris zona yang muat setinggi ±60% area video (sisanya "+N zona lain")."""
+        return max(2, int(self.height() * 0.6) // int(fs * 1.9) - 1)
 
     def set_name(self, html: str) -> None:
         self.name_chip.setText(html)
@@ -247,6 +270,8 @@ class VideoView(QLabel):
 
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
+        if self._zones:                            # ukuran huruf & jumlah baris ikut tile
+            self.set_zones(self._zones)
         self._place()
 
     def _place(self) -> None:
@@ -258,6 +283,27 @@ class VideoView(QLabel):
             self.warn_chip.move(self.width() - self.warn_chip.width() - m, m)
         self.kpi_box.adjustSize()
         self.kpi_box.move(m, self.height() - self.kpi_box.height() - m)
+        if self.zone_box.isVisible():
+            self.zone_box.adjustSize()
+            self.zone_box.move(self.width() - self.zone_box.width() - m,
+                               self.height() - self.zone_box.height() - m)
+
+
+def zone_html(zones: list, fs: int = 13, max_rows: int = 6) -> str:
+    """Isi panel "Per Zona": titik warna zona, nama, jumlah orang; zona terisi di atas."""
+    rows = sorted(zones, key=lambda z: -z[2])
+    shown, rest = rows[:max_rows], rows[max_rows:]
+    html = (f"<div style='font-weight:bold; letter-spacing:1px; color:#BFC5CC;"
+            f" font-size:{max(9, fs - 2)}px'>PER ZONA</div><table cellspacing='0' cellpadding='1'>")
+    for name, color, n in shown:
+        num = f"<b>{n}</b> orang" if n else f"<span style='color:#8A9097'>{n} orang</span>"
+        html += (f"<tr><td><span style='color:{color}'>●</span>&nbsp;{name}</td>"
+                 f"<td align='right'>&nbsp;&nbsp;&nbsp;{num}</td></tr>")
+    html += "</table>"
+    if rest:
+        html += (f"<div style='color:#8A9097'>+{len(rest)} zona lain "
+                 f"({sum(z[2] for z in rest)} orang)</div>")
+    return html
 
 
 def kpi_items(s: dict, limit: int = 2) -> list[tuple[str, str]]:
@@ -339,6 +385,7 @@ class VideoTile(QWidget):
         self.view.setPixmap(QPixmap())
         self.view.setText("berhenti")
         self.view.set_kpis([])
+        self.view.set_zones([])
         self.view.set_warning("")
         self.info.setStyleSheet(f"color:{theme.MUTED};")
         self.info.setText("—")
@@ -361,6 +408,7 @@ class VideoTile(QWidget):
         self.info.setText(f"{w}x{h} | {s.get('stream_fps', 0.0):.0f} FPS" if w else "—")
         self.info.setToolTip("\n".join(summary_lines(s)) + "\n\nKlik ⓘ untuk rincian stream")
         self.view.set_kpis(kpi_items(s))
+        self.view.set_zones(s.get("zones") or [])
         self.view.set_warning(" · ".join(f"⚠ {w}" for w in warnings(s)))
         if self._dialog is not None and self._dialog.isVisible():
             self._dialog.update_stats(s)
